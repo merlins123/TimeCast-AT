@@ -1,0 +1,12 @@
+**/bin/
+**/firmwares/
+
+*.o
+*.a
+*.d
+*.elf
+*.hex
+*.bin
+*.map
+
+*.log
