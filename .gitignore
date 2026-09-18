@@ -10,3 +10,8 @@
 *.map
 
 *.log
+
+/timecast_at/node*.txt
+/timecast_at/*.sh
+
+/nrf_sf_radio/vendor/

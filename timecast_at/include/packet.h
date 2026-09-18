@@ -1,3 +1,8 @@
+/*
+ * SPDX-FileCopyrightText: 2026 Xin He
+ * SPDX-License-Identifier: LGPL-2.1-only
+ */
+
 #ifndef PACKET_H
 #define PACKET_H
 
@@ -22,7 +27,7 @@ extern "C" {
 #define PACKET_P2_UPDATE_WIRE_BIT   (0x80U)
 
 #if (TIMECAST_STORE_MAX_NODES > PACKET_P2_SOURCE_ID_MASK)
-#error "TIMECAST_STORE_MAX_NODES exceeds 7-bit packed source_node_id budget"
+#  error "TIMECAST_STORE_MAX_NODES exceeds 7-bit packed source_node_id budget"
 #endif
 
 typedef struct __attribute__((packed)) {
@@ -53,13 +58,13 @@ typedef struct __attribute__((packed)) {
 } p2_data_frame_t;
 
 enum {
-    PACKET_P1_SYNC_FRAME_LEN              = sizeof(p1_sync_frame_t) - 1U,
-    PACKET_P2_DATA_FRAME_HDR_LEN          = sizeof(p2_data_frame_t) - 1U,
-    PACKET_P2_DATA_MAX_DATA_LEN         = TIMECAST_STORE_MAX_DATA_LEN,
-    PACKET_P2_DATA_MAX_FRAME_LEN      =
+    PACKET_P1_SYNC_FRAME_LEN        = sizeof(p1_sync_frame_t) - 1U,
+    PACKET_P2_DATA_FRAME_HDR_LEN    = sizeof(p2_data_frame_t) - 1U,
+    PACKET_P2_DATA_MAX_DATA_LEN     = TIMECAST_STORE_MAX_DATA_LEN,
+    PACKET_P2_DATA_MAX_FRAME_LEN    =
         PACKET_P2_DATA_FRAME_HDR_LEN + PACKET_P2_DATA_MAX_DATA_LEN,
-    PACKET_PRE_P2_CTRL_FRAME_LEN          = sizeof(pre_collect_frame_t),
-    PACKET_PRE_COMMIT_MAX_FRAME_LEN  = sizeof(pre_commit_frame_t)
+    PACKET_PRE_P2_CTRL_FRAME_LEN    = sizeof(pre_collect_frame_t),
+    PACKET_PRE_COMMIT_MAX_FRAME_LEN = sizeof(pre_commit_frame_t)
 };
 
 void encode_p1_sync(uint8_t *dst,
@@ -87,4 +92,4 @@ bool decode_pre_commit(const uint8_t *frame_buf,
 }
 #endif
 
-#endif
+#endif /* PACKET_H */

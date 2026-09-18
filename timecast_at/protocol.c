@@ -1,6 +1,11 @@
-#include "protocol.h"
+/*
+ * SPDX-FileCopyrightText: 2026 Xin He
+ * SPDX-License-Identifier: LGPL-2.1-only
+ */
 
 #include <string.h>
+
+#include "protocol.h"
 
 static uint32_t _p1_sync_duration_ticks(const timecast_protocol_cfg_t *cfg)
 {
@@ -39,7 +44,6 @@ static void _set_pre_p2_commit_start(timecast_protocol_state_t *state,
                                             _pre_p2_duration_ticks(cfg) +
                                             cfg->p1_guard_ticks;
 }
-
 
 static void _pre_p2_store_p2_frame_len(timecast_protocol_state_t *state,
                                        const timecast_protocol_cfg_t *cfg,
@@ -154,14 +158,12 @@ uint32_t p1_get_slot_start_local_ticks(const timecast_protocol_state_t *state,
 void p1_prepare_tx(timecast_protocol_state_t *state,
                    p1_sync_frame_t *frame)
 {
-
     frame->packet_type = PACKET_TYPE_P1_SYNC;
     frame->relay_cnt = (uint8_t)state->p1.slot_idx;
     frame->flags = 0U;
     frame->epoch = state->current_epoch;
     frame->flags = state->round_run_pre ? 1U : 0U;
     state->p1.ntx_done++;
-
 }
 
 void p1_handle_rx(timecast_protocol_state_t *state,
@@ -225,7 +227,6 @@ void pre_p2_start(timecast_protocol_state_t *state,
                   uint32_t start_local_ticks,
                   const timecast_protocol_cfg_t *cfg, uint8_t desired_len)
 {
-
     memset(&state->pre_p2, 0, sizeof(state->pre_p2));
     state->pre_p2.tx_slot = _tx_first(state);
     state->pre_p2.start_local_ticks = start_local_ticks;
@@ -239,7 +240,6 @@ void pre_p2_start(timecast_protocol_state_t *state,
 uint32_t pre_p2_get_subslot_start_local_ticks(
     const timecast_protocol_state_t *state, const timecast_protocol_cfg_t *cfg)
 {
-
     return state->pre_p2.start_local_ticks +
            ((uint32_t)state->pre_p2.total_subslot * _pre_p2_subslot_period_ticks(cfg));
 }
@@ -248,6 +248,7 @@ bool pre_p2_prepare_tx(const timecast_protocol_state_t *state,
                        pre_collect_frame_t *frame, uint8_t owner_id)
 {
     uint8_t p2_frame_len;
+
     if (!state->pre_p2.present[owner_id]) {
         return false;
     }
@@ -285,7 +286,6 @@ void pre_p2_finish_subslot(timecast_protocol_state_t *state,
     if (state->pre_p2.slot_idx >= (uint8_t)(cfg->ntx * 2U)) {
         state->pre_p2.active = false;
     }
-
 }
 
 static uint8_t _packed_class_len(uint8_t node_count)
@@ -331,14 +331,14 @@ void pre_commit_start(timecast_protocol_state_t *state,
     state->pre_commit.packed_len = _packed_class_len(node_count);
     state->pre_commit.have_schedule = true;
     state->pre_commit.flag_tx = true;
-
 }
 
-void pre_commit_prepare_tx(timecast_protocol_state_t *state, pre_commit_frame_t *frame) {
+void pre_commit_prepare_tx(timecast_protocol_state_t *state, pre_commit_frame_t *frame)
+{
     frame->packet_type = PACKET_TYPE_PRE_COM;
     memcpy(frame->packed_schedule,
-       state->pre_commit.packed_schedule,
-       state->pre_commit.packed_len);
+           state->pre_commit.packed_schedule,
+           state->pre_commit.packed_len);
 }
 
 static bool _p2_start_common(timecast_protocol_state_t *state,
@@ -378,7 +378,6 @@ void p2_start_pre_p2(timecast_protocol_state_t *state,
 
 uint32_t p2_get_subslot_start_local_ticks(const timecast_protocol_state_t *state)
 {
-
     return state->p2.start_local_ticks +
            ((uint32_t)state->p2.slot_idx * state->p2.slot_ticks) +
            state->p2.subslot_offset_ticks[state->p2.subslot_idx];

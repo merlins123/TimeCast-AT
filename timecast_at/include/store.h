@@ -1,3 +1,8 @@
+/*
+ * SPDX-FileCopyrightText: 2026 Xin He
+ * SPDX-License-Identifier: LGPL-2.1-only
+ */
+
 #ifndef TIMECAST_STORE_H
 #define TIMECAST_STORE_H
 
@@ -9,11 +14,11 @@ extern "C" {
 #endif
 
 #ifndef TIMECAST_STORE_MAX_NODES
-#define TIMECAST_STORE_MAX_NODES (64U)
+#  define TIMECAST_STORE_MAX_NODES (64U)
 #endif
 
 #ifndef TIMECAST_STORE_MAX_DATA_LEN
-#define TIMECAST_STORE_MAX_DATA_LEN (110U)
+#  define TIMECAST_STORE_MAX_DATA_LEN (110U)
 #endif
 
 typedef struct {
@@ -37,4 +42,4 @@ uint16_t store_present_count(const timecast_store_t *store);
 }
 #endif
 
-#endif
+#endif /* TIMECAST_STORE_H */

@@ -1,3 +1,8 @@
+/*
+ * SPDX-FileCopyrightText: 2026 Xin He
+ * SPDX-License-Identifier: LGPL-2.1-only
+ */
+
 #include <string.h>
 
 #include "packet.h"
@@ -21,7 +26,6 @@ static uint32_t _u32_from_le(const uint8_t *src)
 void encode_p1_sync(uint8_t *dst,
                     const p1_sync_frame_t *frame)
 {
-
     dst[0] = frame->packet_type;
     dst[1] = (uint8_t)(frame->relay_cnt & PACKET_P1_RELAY_CNT_MASK);
     if ((frame->flags & 1U) != 0U) {
@@ -68,7 +72,7 @@ bool decode_p2_data(const uint8_t *frame_buf,
                     uint8_t *data_out)
 {
     frame->packet_type = frame_buf[0];
-    if(frame->packet_type != PACKET_TYPE_P2_DATA) {
+    if (frame->packet_type != PACKET_TYPE_P2_DATA) {
         return false;
     }
     frame->source_node_id = (uint8_t)(frame_buf[1] & PACKET_P2_SOURCE_ID_MASK);
@@ -78,7 +82,7 @@ bool decode_p2_data(const uint8_t *frame_buf,
                    1U : 0U;
     frame->data_len = frame_buf[4];
     if (frame->data_len > PACKET_P2_DATA_MAX_DATA_LEN) {
-    return false;
+        return false;
     }
     frame->epoch = _u32_from_le(&frame_buf[5]);
     if (data_out && (frame->data_len > 0U)) {
@@ -96,11 +100,11 @@ void encode_pre_p2(uint8_t *dst, const pre_collect_frame_t *frame)
 bool decode_pre_p2(const uint8_t *frame_buf, pre_collect_frame_t *frame)
 {
     frame->packet_type = frame_buf[0];
-    if(frame->packet_type != PACKET_TYPE_PRE_COL) {
+    if (frame->packet_type != PACKET_TYPE_PRE_COL) {
         return false;
     }
     frame->class_id = frame_buf[1];
-    if(frame->class_id >= 16) {
+    if (frame->class_id >= 16) {
         return false;
     }
     return true;
@@ -122,7 +126,7 @@ bool decode_pre_commit(const uint8_t *frame_buf,
     size_t packed_len;
 
     frame->packet_type = frame_buf[0];
-    if(frame->packet_type != PACKET_TYPE_PRE_COM) {
+    if (frame->packet_type != PACKET_TYPE_PRE_COM) {
         return false;
     }
     packed_len = (size_t)((node_count + 1U) / 2U);

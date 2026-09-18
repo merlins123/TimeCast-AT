@@ -1,3 +1,8 @@
+/*
+ * SPDX-FileCopyrightText: 2026 Xin He
+ * SPDX-License-Identifier: LGPL-2.1-only
+ */
+
 #ifndef TIMECAST_PROTOCOL_H
 #define TIMECAST_PROTOCOL_H
 
@@ -15,10 +20,10 @@ extern "C" {
 #define CLASS_MAX_ID     (CLASS_COUNT - 1U)
 #define CLASS_INVALID_ID (CLASS_COUNT)
 #if (TEST_NODE2_CLASS_MAX > CLASS_MAX_ID)
-#error "TEST_NODE2_CLASS_MAX exceeds class range"
+#  error "TEST_NODE2_CLASS_MAX exceeds class range"
 #endif
 #if (TEST_NODE2_CLASS_MIN > TEST_NODE2_CLASS_MAX)
-#error "TEST_NODE2_CLASS_MIN exceeds TEST_NODE2_CLASS_MAX"
+#  error "TEST_NODE2_CLASS_MIN exceeds TEST_NODE2_CLASS_MAX"
 #endif
 
 typedef struct {
@@ -182,4 +187,4 @@ void pre_commit_finish_slot(timecast_protocol_state_t *state, bool did_tx, uint8
 }
 #endif
 
-#endif
+#endif /* TIMECAST_PROTOCOL_H */

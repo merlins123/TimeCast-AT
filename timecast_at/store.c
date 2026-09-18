@@ -1,6 +1,11 @@
-#include "store.h"
+/*
+ * SPDX-FileCopyrightText: 2026 Xin He
+ * SPDX-License-Identifier: LGPL-2.1-only
+ */
 
 #include <string.h>
+
+#include "store.h"
 
 void store_init(timecast_store_t *store)
 {

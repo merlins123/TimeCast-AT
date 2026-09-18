@@ -1,3 +1,8 @@
+/*
+ * SPDX-FileCopyrightText: 2026 Xin He
+ * SPDX-License-Identifier: LGPL-2.1-only
+ */
+
 #include <inttypes.h>
 #include <stdbool.h>
 #include <stdio.h>
@@ -10,17 +15,18 @@
 #include "store.h"
 
 #if (APP_DATA_LEN > (TIMECAST_STORE_MAX_DATA_LEN))
-#error "APP_DATA_LEN exceeds TIMECAST_STORE_MAX_DATA_LEN budget"
+#  error "APP_DATA_LEN exceeds TIMECAST_STORE_MAX_DATA_LEN budget"
 #endif
 #define LOCAL_DATA_LEN ((uint8_t)(APP_DATA_LEN))
-#define LOCAL_P2_PAYLOAD_LEN ((uint8_t)(NRF_SF_RADIO_HDR_LEN + PACKET_P2_DATA_FRAME_HDR_LEN + LOCAL_DATA_LEN))
+#define LOCAL_P2_PAYLOAD_LEN \
+        ((uint8_t)(NRF_SF_RADIO_HDR_LEN + PACKET_P2_DATA_FRAME_HDR_LEN + LOCAL_DATA_LEN))
 #define PACKET_AIR_TIME_US(payload_len) \
         (8U * ((uint32_t)(payload_len) + SLOT_PHY_OVERHEAD_BYTES))
 #define P2_PAYLOAD_TO_SUBSLOT_US(payload_len) \
         (SLOT_PROCESSING_US + RADIO_RAMPUP_US + \
          PACKET_AIR_TIME_US(payload_len))
 #if (NTX > 63U)
-#error "NTX exceeds 7-bit packed relay_cnt budget"
+#  error "NTX exceeds 7-bit packed relay_cnt budget"
 #endif
 
 static uint8_t rx_buffer[255] = { 0 };
@@ -118,7 +124,6 @@ static uint32_t _fixed_p2_slot_ticks(void)
     return (uint32_t)g_proto_cfg.p2_node_count *
            (g_proto_cfg.p2_subslot_ticks + g_proto_cfg.p2_guard_ticks);
 }
-           
 
 static uint32_t _original_p2_duration_ticks(void)
 {
@@ -240,7 +245,7 @@ static void _commit_round_schedule(void)
     if ((desired_data_len <= scheduled_data_len) ||
         (g_local_scheduled_data_len == 0U)) {
         data_len = (desired_data_len <= scheduled_data_len) ?
-                      desired_data_len : 0U;
+                   desired_data_len : 0U;
         _build_local_data_with_len(data, data_len);
         memcpy(g_local_scheduled_data, data, data_len);
         g_local_scheduled_data_len = data_len;
@@ -263,9 +268,9 @@ static void _local_data_init(void)
     }
 
     for (node_id = 0U; node_id < g_proto_cfg.p2_node_count; node_id++) {
-        g_proto.scheduled_class[node_id] = _is_master() ?
-                                           CLASS_MAX_ID :
-                                           frame_len_to_class((uint8_t)PACKET_P2_DATA_FRAME_HDR_LEN);
+        g_proto.scheduled_class[node_id] =
+            _is_master() ? CLASS_MAX_ID :
+            frame_len_to_class((uint8_t)PACKET_P2_DATA_FRAME_HDR_LEN);
     }
 
     data_len = _local_data_len_for_source(source_id);
@@ -316,9 +321,8 @@ static void _handle_pre_commit_rx(const uint8_t *payload)
     pre_commit_frame_t frame;
     size_t packed_len = 0U;
 
-    if(!decode_pre_commit(payload, g_proto_cfg.p2_node_count, &frame,
-                         &packed_len))
-    {
+    if (!decode_pre_commit(payload, g_proto_cfg.p2_node_count, &frame,
+                           &packed_len)) {
         g_pre_diag.commit_reject++;
         return;
     }
@@ -434,7 +438,7 @@ static void _log_round_summary_original(void)
            g_round_count,
            (unsigned)LOCAL_NODE_ID,
            _is_master() ? "master" : "follower");
-    
+
     printf("[tc] r=%" PRIu32 " e=%" PRIu32 "\n",
            g_round_count,
            g_proto.current_epoch);
@@ -452,9 +456,9 @@ static void _log_round_summary_original(void)
     printf("[tc] r=%" PRIu32 " p2store=%" PRIu32 "\n",
            g_round_count,
            g_proto.p2.store_updates);
-           
+
     _log_p2_success_rate(present_count);
-    
+
     printf("[tc] r=%" PRIu32 " present=%u/%u\n",
            g_round_count,
            (unsigned)present_count,
@@ -462,7 +466,7 @@ static void _log_round_summary_original(void)
     printf("[tc] r=%" PRIu32 " p1slot=%u\n",
            g_round_count,
            (unsigned)P1_SLOT_US);
-        
+
     if (present_count < g_proto_cfg.p2_node_count) {
         for (uint8_t id = 0U; id < g_proto_cfg.p2_node_count; id++) {
             missing_map[id] = g_store.entries[id].present ? '.' : 'X';
@@ -483,14 +487,14 @@ static void _log_round_summary_original(void)
                    &missing_map[offset]);
         }
     }
-        
+
     printf("[tc] r=%" PRIu32 " p2slot=%" PRIu32 "\n",
            g_round_count,
            NRF_SF_RADIO_TIMER_TICKS_TO_US(p2_slot_ticks));
     printf("[tc] r=%" PRIu32 " p2rdu=%" PRIu32 "\n",
            g_round_count,
            NRF_SF_RADIO_TIMER_TICKS_TO_US(p2_duration_ticks));
-           
+
     printf("[tc] r=%" PRIu32 " p2start=%" PRIu32 "\n",
            g_round_count,
            NRF_SF_RADIO_TIMER_TICKS_TO_US(g_round_p2_start_ticks));
@@ -515,7 +519,6 @@ static void _log_round_summary_original(void)
            g_round_count,
            g_p2_diag.min_arm_slack_ticks,
            g_p2_diag.max_address_offset_ticks);
-           
 }
 
 static void _log_round_summary_pre_p2(void)
@@ -557,7 +560,6 @@ static void _log_round_summary_pre_p2(void)
     printf("[tc] r=%" PRIu32 " pp2rx=%" PRIu32 "\n",
            g_round_count,
            g_proto.pre_p2.rx_valid);
-
 
     if (USE_PRE_P2) {
         printf("[tc:precol] R=%" PRIu32 " txmiss=%" PRIu32 "\n",
@@ -730,7 +732,7 @@ static void _handle_pre_p2_rx(const uint8_t *frame_buf)
     pre_collect_frame_t frame;
     uint8_t p2_frame_len;
 
-    if(!decode_pre_p2(frame_buf, &frame)) {
+    if (!decode_pre_p2(frame_buf, &frame)) {
         g_pre_diag.collect_reject++;
         return;
     }
@@ -744,7 +746,7 @@ static void _handle_p2_rx(const uint8_t *frame_buf)
     p2_data_frame_t frame;
     uint8_t data[PACKET_P2_DATA_MAX_DATA_LEN];
 
-    if(!decode_p2_data(frame_buf, &frame, data)) {
+    if (!decode_p2_data(frame_buf, &frame, data)) {
         g_p2_diag.reject++;
         return;
     }
@@ -783,9 +785,11 @@ static void _run_p1_slot(void)
     uint32_t now_tick = nrf_sf_radio_now_ticks();
 
     if ((int32_t)(now_tick - slot_start_ticks) >= 0) {
-        /*printf("[timecast] slot miss: slot=%u now=%" PRIu32 " start=%" PRIu32 "\n",
-               (unsigned)g_proto.p1.slot_idx,
-               now_tick, slot_start_ticks);*/
+        /*
+         * printf("[timecast] slot miss: slot=%u now=%" PRIu32 " start=%" PRIu32 "\n",
+         * (unsigned)g_proto.p1.slot_idx,
+         * now_tick, slot_start_ticks);
+         */
         (void)p1_finish_slot(&g_proto, &g_proto_cfg, do_tx);
         return;
     }
@@ -802,16 +806,18 @@ static void _run_p1_slot(void)
             p1_finish_slot(&g_proto, &g_proto_cfg, true);
         }
         else {
-            //uint32_t failure_ticks = nrf_sf_radio_now_ticks();
-            //int32_t slack_ticks = (int32_t)(slot_start_ticks - failure_ticks);
+            /* uint32_t failure_ticks = nrf_sf_radio_now_ticks(); */
+            /* int32_t slack_ticks = (int32_t)(slot_start_ticks - failure_ticks); */
 
             g_p1_tx_sched_fails++;
-            /*printf("[timecast] TX schedule failed: now=%" PRIu32
-                   " deadline=%" PRIu32 " slack=%" PRId32
-                   " ticks fails=%" PRIu32 "\n",
-                   failure_ticks,
-                   slot_start_ticks + NRF_SF_RADIO_RAMPUP_TIME_TICKS,
-                   slack_ticks, g_p1_tx_sched_fails);*/
+            /*
+             * printf("[timecast] TX schedule failed: now=%" PRIu32
+             * " deadline=%" PRIu32 " slack=%" PRId32
+             * " ticks fails=%" PRIu32 "\n",
+             * failure_ticks,
+             * slot_start_ticks + NRF_SF_RADIO_RAMPUP_TIME_TICKS,
+             * slack_ticks, g_p1_tx_sched_fails);
+             */
 
             p1_finish_slot(&g_proto, &g_proto_cfg, false);
         }
@@ -841,11 +847,13 @@ static void _run_pre_p2_subslot(void)
 
         if ((int32_t)(now_tick - subslot_start_ticks) >= 0) {
             g_pre_diag.collect_tx_miss++;
-            /*printf("[timecast] pre-p2 TX miss: slot=%u sub=%u"
-                   " now=%" PRIu32 " deadline=%" PRIu32 "\n",
-                   (unsigned)g_proto.pre_p2.slot_idx,
-                   (unsigned)g_proto.pre_p2.subslot_idx,
-                   now_tick, subslot_start_ticks);*/
+            /*
+             * printf("[timecast] pre-p2 TX miss: slot=%u sub=%u"
+             * " now=%" PRIu32 " deadline=%" PRIu32 "\n",
+             * (unsigned)g_proto.pre_p2.slot_idx,
+             * (unsigned)g_proto.pre_p2.subslot_idx,
+             * now_tick, subslot_start_ticks);
+             */
             pre_p2_finish_subslot(&g_proto, &g_proto_cfg);
             return;
         }
@@ -868,11 +876,13 @@ static void _run_pre_p2_subslot(void)
     if ((int32_t)(now_tick - subslot_start_ticks +
                   NRF_SF_RADIO_US_TO_TIMER_TICKS(P2_RX_LEAD_US)) >= 0) {
         g_pre_diag.collect_rx_miss++;
-        /*printf("[timecast] pre-p2 RX miss: slot=%u sub=%u"
-               " now=%" PRIu32 " deadline=%" PRIu32 "\n",
-               (unsigned)g_proto.pre_p2.slot_idx,
-               (unsigned)g_proto.pre_p2.subslot_idx,
-               now_tick, subslot_start_ticks);*/
+        /*
+         * printf("[timecast] pre-p2 RX miss: slot=%u sub=%u"
+         * " now=%" PRIu32 " deadline=%" PRIu32 "\n",
+         * (unsigned)g_proto.pre_p2.slot_idx,
+         * (unsigned)g_proto.pre_p2.subslot_idx,
+         * now_tick, subslot_start_ticks);
+         */
         pre_p2_finish_subslot(&g_proto, &g_proto_cfg);
         return;
     }
@@ -920,10 +930,12 @@ static void _run_p2_subslot(void)
     if (tx_slot) {
         if ((int32_t)(now_tick - subslot_start_ticks) >= 0) {
             g_p2_diag.subslot_miss++;
-            /*printf("[timecast] p2 miss: slot=%u sub=%u now=%" PRIu32 " deadline=%" PRIu32 "\n",
-                   (unsigned)g_proto.p2.slot_idx,
-                   (unsigned)g_proto.p2.subslot_idx,
-                   now_tick, subslot_start_ticks);*/
+            /*
+             * printf("[timecast] p2 miss: slot=%u sub=%u now=%" PRIu32 " deadline=%" PRIu32 "\n",
+             * (unsigned)g_proto.p2.slot_idx,
+             * (unsigned)g_proto.p2.subslot_idx,
+             * now_tick, subslot_start_ticks);
+             */
             (void)p2_finish_subslot(&g_proto, &g_proto_cfg);
             return;
         }
@@ -941,10 +953,11 @@ static void _run_p2_subslot(void)
                                    subslot_active_end_ticks,
                                    PACKET_P2_DATA_FRAME_HDR_LEN +
                                    frame.data_len)) {
-           /* printf("[timecast] P2 TX schedule failed: slot=%u sub=%u\n",
-                   (unsigned)g_proto.p2.slot_idx,
-                   (unsigned)g_proto.p2.subslot_idx);
-            */
+            /*
+             * printf("[timecast] P2 TX schedule failed: slot=%u sub=%u\n",
+             * (unsigned)g_proto.p2.slot_idx,
+             * (unsigned)g_proto.p2.subslot_idx);
+             */
             p2_finish_subslot(&g_proto, &g_proto_cfg);
             return;
         }
@@ -959,10 +972,12 @@ static void _run_p2_subslot(void)
     if ((int32_t)(now_tick - rxen_ticks) >= 0) {
         g_p2_diag.subslot_miss++;
         g_p2_diag.rx_arm_late++;
-        /*printf("[timecast] p2 miss: slot=%u sub=%u now=%" PRIu32 " deadline=%" PRIu32 "\n",
-               (unsigned)g_proto.p2.slot_idx,
-               (unsigned)g_proto.p2.subslot_idx,
-               now_tick, subslot_start_ticks);*/
+        /*
+         * printf("[timecast] p2 miss: slot=%u sub=%u now=%" PRIu32 " deadline=%" PRIu32 "\n",
+         * (unsigned)g_proto.p2.slot_idx,
+         * (unsigned)g_proto.p2.subslot_idx,
+         * now_tick, subslot_start_ticks);
+         */
         (void)p2_finish_subslot(&g_proto, &g_proto_cfg);
         return;
     }
@@ -1002,11 +1017,11 @@ static void _run_p2_subslot(void)
     }
     else if (rx_status == 2U) {
         g_p2_diag.end_timeout++;
-        //printf("[timecast-at] P2 RX end timeout\n");
+        /* printf("[timecast-at] P2 RX end timeout\n"); */
     }
     else if (rx_status == 3U) {
         g_p2_diag.crc_error++;
-        //printf("[timecast-at] P2 RX CRC error\n");
+        /* printf("[timecast-at] P2 RX CRC error\n"); */
     }
 
     p2_finish_subslot(&g_proto, &g_proto_cfg);
@@ -1155,6 +1170,7 @@ static void _run_round_pre_p2(uint32_t *next_master_round_start_ticks)
 int main(void)
 {
     uint32_t next_master_round_start_ticks;
+
     printf("TimeCast start. node_id=%u hop=p1 role=%s ntx=%u"
            " pre_p2=%u app_data=%u payload=%u\n",
            (unsigned)LOCAL_NODE_ID,
@@ -1175,7 +1191,7 @@ int main(void)
     next_master_round_start_ticks = nrf_sf_radio_now_ticks() +
                                     NRF_SF_RADIO_US_TO_TIMER_TICKS(MASTER_START_DELAY_US);
 
-    while (g_round_count<ROUND_TIME) {
+    while (g_round_count < ROUND_TIME) {
         if (USE_PRE_P2) {
             _run_round_pre_p2(&next_master_round_start_ticks);
         }
@@ -1187,7 +1203,7 @@ int main(void)
             g_p2_success.total_present += g_store.present_count;
             g_p2_success.sample_rounds++;
         }
-        if ((g_round_count % 100U) == 0U){
+        if ((g_round_count % 100U) == 0U) {
             if (USE_PRE_P2) {
                 _log_round_summary_pre_p2();
             }
@@ -1196,8 +1212,6 @@ int main(void)
             }
         }
     }
-
-    
 
     return 0;
 }

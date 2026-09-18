@@ -10,20 +10,48 @@ This module is not a BLE stack. It does not provide advertising procedures, conn
 
 The implementation is limited to nRF52 devices equipped with the RADIO, TIMER2, TIMER3, and PPI peripherals.
 
+The CC1352R1 port is incomplete. The `cc26x2_cc13x2` build branch currently
+compiles TI DriverLib, the BLE5 RF patch, and RFQueue from `vendor/cc13x2ware`.
+It does not implement this module's initialization, scheduled TX/RX, or
+timestamp interfaces for CC1352R1. Building these vendor sources alone does
+not establish a working radio backend or validate its timing on hardware.
+
 ## Enabling the module
 
-Add the module to the application Makefile:
+This repository supplies `nrf_sf_radio` as an external RIOT module. For the
+included `timecast_at` application, use the following directory layout:
+
+```text
+workspace/
+├── RIOT/
+└── modules/                 # This repository
+    ├── LICENSE
+    ├── nrf_sf_radio/
+    └── timecast_at/
+```
+
+Add the following to the application Makefile before including
+`$(RIOTBASE)/Makefile.include`:
 
 ```make
+RIOTBASE ?= $(abspath $(CURDIR)/../../RIOT)
+EXTERNAL_MODULE_DIRS += $(abspath $(CURDIR)/..)
 USEMODULE += nrf_sf_radio
 ```
+
+These paths assume the application is in `modules/timecast_at`. For another
+layout, set `RIOTBASE` to the RIOT checkout and `EXTERNAL_MODULE_DIRS` to the
+directory containing `nrf_sf_radio`.
 
 Include the physical-layer and link-layer interfaces as needed:
 
 ```c
-#include "nrf_sf_radio/link_radio.h"
-#include "nrf_sf_radio/radio_driver.h"
+#include "link_radio.h"
+#include "radio_driver.h"
 ```
+
+The module's `Makefile.include` adds its `include/` directory to the header
+search path automatically.
 
 Call `nrf_sf_radio_start()` once before using any other module function:
 
@@ -50,7 +78,7 @@ uint32_t txen_ticks = now + NRF_SF_RADIO_US_TO_TIMER_TICKS(100U);
 uint32_t end_ticks = now + NRF_SF_RADIO_US_TO_TIMER_TICKS(600U);
 
 bool sent = nrf_sf_radio_tx_start(payload, txen_ticks, end_ticks,
-                                  sizeof(payload));
+                                 sizeof(payload));
 ```
 
 The END deadline must include the scheduled delay, radio ramp-up, complete
@@ -62,12 +90,12 @@ packet airtime, and a suitable timing margin.
 link-layer header when a valid packet is received:
 
 ```c
-uint8_t packet[64] = { 0 };
+uint8_t packet[253] = { 0 };
 uint8_t *payload = packet;
 
 uint8_t status = nrf_sf_radio_rx_start(&payload, rxen_ticks,
-                                       address_deadline_ticks,
-                                       end_deadline_ticks);
+                                      address_deadline_ticks,
+                                      end_deadline_ticks);
 if (status == 0U) {
     /* payload now points to the application payload in packet. */
 }
@@ -96,7 +124,7 @@ timeout is specified in timer ticks, while its ADDRESS timeout is specified in
 microseconds:
 
 ```c
-uint8_t packet[64] = { 0 };
+uint8_t packet[253] = { 0 };
 uint8_t *payload = packet;
 
 uint32_t address_ticks = nrf_sf_radio_rx_listen_until_packet(
@@ -105,7 +133,11 @@ uint32_t address_ticks = nrf_sf_radio_rx_listen_until_packet(
     1000U);
 ```
 
-On success, the function returns the corrected transmitter-side ADDRESS timestamp and updates the `payload` pointer. It returns zero on timeout or CRC failure.
+On success, the function returns the receiver's local ADDRESS timestamp minus
+a fixed compensation of 160 timer ticks (10 us), and updates the `payload`
+pointer. The result remains in the receiver's local TIMER3 time base; it is
+not a reading of the transmitting node's clock. The function returns zero on
+timeout or CRC failure.
 
 ## Packet format
 
@@ -124,6 +156,12 @@ bytes are used by the advertising address, leaving at most 245 application
 payload bytes. A receive buffer for the maximum packet requires 253 bytes:
 one S0 byte, one LENGTH byte, and 251 following bytes.
 
+The TX helper does not validate the application payload length; callers must
+keep it at or below 245 bytes. The RX helpers do not accept a buffer size and
+cannot restrict reception to the caller's allocation. Use a receive buffer of
+at least 253 bytes with the current RADIO configuration, as in the examples
+above, even if the application normally exchanges shorter packets.
+
 The preamble, four-byte radio access address, and three-byte CRC are handled by
 the RADIO peripheral and are not part of `NRF_SF_RADIO_HDR_LEN`.
 
@@ -136,7 +174,7 @@ building the module:
 
 | Macro | Default | Description |
 |-------|---------|-------------|
-| `NRF_SF_RADIO_ACCESS_ADDRESS` | `0x8E89BED6U` | Four-byte RADIO access address |
+| `NRF_SF_RADIO_ACCESS_ADDRESS` | `0x8389BED6U` | Four-byte RADIO access address |
 | `NRF_SF_RADIO_FAST_RAMPUP` | `1` | Select fast (`1`) or default (`0`) ramp-up |
 
 For example, an application Makefile can select a custom access address and
@@ -151,9 +189,9 @@ Fast ramp-up uses 40 us and default ramp-up uses 140 us. Values other than
 `0` and `1` for `NRF_SF_RADIO_FAST_RAMPUP` cause a compile-time error.
 
 All communicating nodes must use the same access address, channel, PHY mode,
-and timing configuration. The default access address is the standard BLE
-advertising access address. A custom value is recommended when unrelated BLE
-advertising traffic must not be accepted by the RADIO hardware.
+and compatible timing configuration. The default access address is the custom
+value `0x8389BED6U`. Separate experiments can select different access addresses
+to avoid accepting each other's packets.
 
 ### Runtime configuration
 
@@ -231,6 +269,26 @@ resource conflicts.
 
 ## Test
 
-The automated single-board test and manual two-board communication test are
-documented in
-`tests/sys/nrf_sf_radio/README.md`.
+To check application integration, build the included `timecast_at` application
+from this repository's root, using the directory layout above:
+
+```sh
+make -C timecast_at BOARD=nrf52840dk -j4
+```
+
+A successful build checks compilation and linking. Radio operation and
+synchronization timing require hardware tests.
+
+The existing single-board and two-board tests remain in the development RIOT
+checkout under `tests/sys/nrf_sf_radio/`; they are not included in this
+repository or guaranteed to be present in another RIOT checkout. Their
+Makefiles and source files still use the earlier in-tree module layout.
+Before using those tests, add the external module search path and update
+their includes to `"link_radio.h"` and `"radio_driver.h"`. Their test procedures
+are described in `tests/sys/nrf_sf_radio/README.md` within that checkout.
+
+## License
+
+The module's own source files are licensed under `LGPL-2.1-only`.
+See [LICENSE](../LICENSE) for the full license text. Third-party sources under
+`vendor/` retain their respective copyright notices and license terms.
