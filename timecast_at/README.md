@@ -4,8 +4,8 @@ TimeCast-AT is a RIOT application for synchronous flooding experiments. It
 uses the external [`nrf_sf_radio`](../nrf_sf_radio/README.md) module for scheduled
 radio transmission, reception, and hardware timestamps on nRF52 devices.
 
-The application implements round synchronization, data dissemination, and an
-optional adaptive schedule based on each node's payload size. The current
+The application implements round synchronization, data dissemination, and
+adaptive scheduling based on each node's payload size. The current
 experiment generates synthetic payloads filled with the character `c`.
 
 ## Protocol operation
@@ -19,24 +19,30 @@ Two modes are selected at build time:
 
 | Mode | Setting | Round sequence |
 |------|---------|----------------|
-| Fixed schedule (default) | `TIMECAST_USE_PRE_P2=0` | P1 synchronization, P2 data, round gap |
-| Adaptive schedule | `TIMECAST_USE_PRE_P2=1` | P1 synchronization, optional collection and commit, P2 data, round gap |
+| Fixed schedule | `TIMECAST_USE_PRE_P2=0` | P1 synchronization, P2 data, round gap |
+| Adaptive schedule (default) | `TIMECAST_USE_PRE_P2=1` | P1 synchronization, optional commit, P2 data, round gap |
 
 P2 assigns one subslot to each source node within a slot. Nodes alternate
 transmit and receive slots, forwarding data already available in their local
 store. P2 runs for `2 * TIMECAST_P2_NTX` slots. The store is cleared each round
 and retains the first data entry accepted for each source, including local data.
 
-In adaptive mode, payload sizes are represented by 16 classes. When a schedule
-update is required, the pre-P2 collection phase disseminates the requested
-classes, and the master floods a packed schedule during the commit phase.
-Nodes then derive their P2 subslot durations from the committed classes.
-Rounds without an update reuse the existing schedule.
+In adaptive mode, payload sizes are represented by 16 classes. Each P2 packet
+carries its source's desired class and schedule-update bit, which relays
+preserve with the data. The master records received update requests and floods
+a packed class table during the next round's commit phase. Nodes derive their
+P2 subslot durations from the committed classes.
 
-The master requests an update on the first adaptive round, when it observes
-an update request, or after the configured number of consecutive incomplete
-P2 rounds. P1 announces whether collection and commit will run in that round.
-The master retains the previous class for a source missing from collection.
+The initial class table is derived from `TIMECAST_MAX_DATA_LEN`; the master
+also sets its own entry to its desired class before the first commit. The
+master commits on the first adaptive round, when its own class changes, when
+it observes an update request, or after the configured number of consecutive
+incomplete P2 rounds. P1 announces whether commit will run in that round.
+The master retains the previous class for a source without a received update.
+
+Followers start without a valid schedule and receive a commit before entering
+P2. A P1 announcement of commit invalidates their previous schedule until a
+commit is received. Rounds without an update reuse an existing valid schedule.
 
 ## Source layout
 
@@ -70,11 +76,11 @@ make -C timecast_at BOARD=nrf52840dk LOCAL_NODE_ID=0 \
     TIMECAST_P2_NODE_COUNT=4 -j4
 ```
 
-To build with adaptive scheduling:
+To select fixed scheduling instead:
 
 ```sh
 make -C timecast_at BOARD=nrf52840dk LOCAL_NODE_ID=0 \
-    TIMECAST_P2_NODE_COUNT=4 TIMECAST_USE_PRE_P2=1 -j4
+    TIMECAST_P2_NODE_COUNT=4 TIMECAST_USE_PRE_P2=0 -j4
 ```
 
 The firmware is generated at `bin/nrf52840dk/timecast_at.elf` inside this
@@ -110,20 +116,24 @@ The main Makefile variables are listed below. They can be overridden on the
 | `LOCAL_NODE_ID` | `0` | Logical node ID; `0` selects the master |
 | `TIMECAST_P2_NODE_COUNT` | `4` | Total participating nodes, including the master |
 | `TIMECAST_STORE_MAX_NODES` | Node count | Number of per-source store entries |
-| `TIMECAST_USE_PRE_P2` | `0` | Enable adaptive scheduling with `1` |
-| `TIMECAST_NTX` | `7` | P1 and pre-P2 repetition parameter; phase lengths use `2 * NTX` |
+| `TIMECAST_USE_PRE_P2` | `1` | Adaptive scheduling; select fixed scheduling with `0` |
+| `TIMECAST_NTX` | `7` | P1 and commit repetition parameter; each phase has `2 * NTX` slots |
 | `TIMECAST_P2_NTX` | `10` | P2 repetition parameter; phase length is `2 * P2_NTX` slots |
 | `TIMECAST_APP_DATA_LEN` | `75` | Desired application data length in bytes |
+| `TIMECAST_MAX_DATA_LEN` | `75` | Application data length used to initialize the adaptive class table |
 | `TIMECAST_ROUND_TIME` | `1050` | Local round-loop limit |
 | `TIMECAST_FAST_RAMPUP` | `1` | Select 40 us radio ramp-up; `0` selects 140 us |
 | `TIMECAST_MASTER_P2_INCOMPLETE_PRE_THRESHOLD` | `10` | Consecutive incomplete master rounds before requesting an update; `0` disables this trigger |
 
 
 Keep the store capacity at least as large as the node count. The current
-store supports up to 110 application data bytes per source. In fixed mode,
-the configured P2 subslot must accommodate every node's payload. In adaptive
-mode, a larger desired payload waits for a suitable committed schedule; the
-application retains its previously scheduled data while waiting.
+store supports up to 110 application data bytes per source. Set
+`TIMECAST_MAX_DATA_LEN` consistently across nodes, within this capacity and at
+least as large as every node's initial payload. In fixed mode, the configured
+P2 subslot must accommodate every node's payload. In adaptive mode, a larger
+desired payload waits for a suitable committed schedule. The application
+retains cached data that fits the committed capacity; otherwise, it limits
+the transmitted cached data to the fitting prefix.
 
 The [Makefile](Makefile) also exposes processing margins, phase guards,
 receive windows, and slot durations. Defaults derive airtime at BLE 1 Mbit/s
@@ -143,7 +153,7 @@ TIMER2, TIMER3, and PPI channels 9 through 15. Other enabled components must
 not configure these resources concurrently. See the
 [driver resource allocation](../nrf_sf_radio/README.md#hardware-resource-usage).
 Compilation verifies source integration; synchronization accuracy and
-collection performance require measurements on the target boards.
+data dissemination performance require measurements on the target boards.
 
 ## License
 

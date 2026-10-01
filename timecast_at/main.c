@@ -32,16 +32,12 @@
 static uint8_t rx_buffer[255] = { 0 };
 
 #define P1_SLOT_TICKS         NRF_SF_RADIO_US_TO_TIMER_TICKS(P1_SLOT_US)
-#define PRE_P2_SUBSLOT_TICKS  NRF_SF_RADIO_US_TO_TIMER_TICKS(PRE_P2_SUBSLOT_US)
 #define P2_SUBSLOT_TICKS      NRF_SF_RADIO_US_TO_TIMER_TICKS(P2_SUBSLOT_US)
 #define P1_SLOT_ACTIVE_US     (P1_SLOT_US - SLOT_PROCESSING_US)
-#define PRE_P2_SUBSLOT_PERIOD_US (PRE_P2_SUBSLOT_US + PRE_P2_SUBSLOT_GUARD_US)
 #define P2_SUBSLOT_PERIOD_US  (P2_SUBSLOT_US + P2_SUBSLOT_GUARD_US)
 #define P1_SYNC_DURATION_TICKS ((uint32_t)(2U * NTX) * P1_SLOT_TICKS)
 #define P1_SLOT_ACTIVE_TICKS  NRF_SF_RADIO_US_TO_TIMER_TICKS(P1_SLOT_ACTIVE_US)
-#define PRE_P2_SLOT_PROCESSING_TICKS NRF_SF_RADIO_US_TO_TIMER_TICKS(PRE_P2_SLOT_PROCESSING_US)
 #define SLOT_PROCESSING_TICKS NRF_SF_RADIO_US_TO_TIMER_TICKS(SLOT_PROCESSING_US)
-#define PRE_P2_SUBSLOT_PERIOD_TICKS NRF_SF_RADIO_US_TO_TIMER_TICKS(PRE_P2_SUBSLOT_PERIOD_US)
 #define P2_SUBSLOT_PERIOD_TICKS NRF_SF_RADIO_US_TO_TIMER_TICKS(P2_SUBSLOT_PERIOD_US)
 
 static timecast_store_t g_store;
@@ -52,7 +48,6 @@ static uint8_t g_local_desired_class;
 static uint8_t g_local_scheduled_data_len;
 static uint8_t g_local_scheduled_data[TIMECAST_STORE_MAX_DATA_LEN];
 static uint32_t g_p1_tx_sched_fails;
-static bool g_has_applied_schedule;
 static struct {
     uint32_t subslot_miss;
     uint32_t rx_attempts;
@@ -69,14 +64,6 @@ static struct {
     uint32_t sample_rounds;
 } g_p2_success;
 static struct {
-    uint32_t collect_tx_miss;
-    uint32_t collect_rx_miss;
-    uint32_t collect_tx_error;
-    uint32_t collect_rx_attempts;
-    uint32_t collect_no_address;
-    uint32_t collect_end_timeout;
-    uint32_t collect_crc_error;
-    uint32_t collect_reject;
     uint32_t commit_tx_miss;
     uint32_t commit_rx_miss;
     uint32_t commit_tx_error;
@@ -97,9 +84,6 @@ static timecast_protocol_cfg_t g_proto_cfg = {
     .glossy_slot_ticks = P1_SLOT_TICKS,
     .p1_rx_ts_to_slot_start_ticks = NRF_SF_RADIO_US_TO_TIMER_TICKS(P1_RX_TS_TO_SLOT_START_US),
     .p1_guard_ticks = NRF_SF_RADIO_US_TO_TIMER_TICKS(P2_START_GUARD_US),
-    .pre_p2_subslot_ticks = PRE_P2_SUBSLOT_TICKS,
-    .pre_p2_guard_ticks = NRF_SF_RADIO_US_TO_TIMER_TICKS(PRE_P2_SUBSLOT_GUARD_US),
-    .pre_p2_rx_window_ticks = NRF_SF_RADIO_US_TO_TIMER_TICKS(P2_RX_WINDOW_US),
     .p2_subslot_ticks = P2_SUBSLOT_TICKS,
     .p2_guard_ticks = NRF_SF_RADIO_US_TO_TIMER_TICKS(P2_SUBSLOT_GUARD_US),
     .p2_rx_window_ticks = NRF_SF_RADIO_US_TO_TIMER_TICKS(P2_RX_WINDOW_US),
@@ -112,11 +96,6 @@ static timecast_protocol_cfg_t g_proto_cfg = {
 static uint32_t _p2_duration_ticks(uint8_t node_count)
 {
     return ((uint32_t)(2U * P2_NTX) * (uint32_t)node_count * P2_SUBSLOT_PERIOD_TICKS);
-}
-
-static uint32_t _pre_p2_duration_ticks(uint8_t node_count)
-{
-    return ((uint32_t)(2U * NTX) * (uint32_t)node_count * PRE_P2_SUBSLOT_PERIOD_TICKS);
 }
 
 static uint32_t _fixed_p2_slot_ticks(void)
@@ -149,8 +128,6 @@ static uint32_t _improved_round_period_ticks(bool run_pre)
     uint32_t period_ticks = P1_SYNC_DURATION_TICKS + g_proto_cfg.p1_guard_ticks;
 
     if (run_pre) {
-        period_ticks += _pre_p2_duration_ticks(g_proto_cfg.p2_node_count);
-        period_ticks += g_proto_cfg.p1_guard_ticks;
         period_ticks += _pre_commit_duration_ticks(g_proto.pre_commit.slot_ticks);
         period_ticks += g_proto_cfg.p1_guard_ticks;
     }
@@ -223,11 +200,6 @@ static void _build_local_data_with_len(uint8_t *dst, uint8_t data_len)
     memset(dst, 'c', (size_t)data_len);
 }
 
-static bool _local_packet_should_request_update(uint8_t owner_id)
-{
-    return (owner_id == (uint8_t)LOCAL_NODE_ID) && g_proto.round_tx_update_req;
-}
-
 static void _commit_round_schedule(void)
 {
     uint8_t local_source_id = (uint8_t)LOCAL_NODE_ID;
@@ -242,13 +214,13 @@ static void _commit_round_schedule(void)
     scheduled_data_len = (uint8_t)(scheduled_p2_frame_len -
                                    PACKET_P2_DATA_FRAME_HDR_LEN);
     desired_data_len = _local_data_len_for_source(local_source_id);
-    if ((desired_data_len <= scheduled_data_len) ||
-        (g_local_scheduled_data_len == 0U)) {
-        data_len = (desired_data_len <= scheduled_data_len) ?
-                   desired_data_len : 0U;
+    if ((desired_data_len <= scheduled_data_len) ) {
+        data_len = desired_data_len;
         _build_local_data_with_len(data, data_len);
         memcpy(g_local_scheduled_data, data, data_len);
         g_local_scheduled_data_len = data_len;
+    } else if(g_local_scheduled_data_len > scheduled_data_len){
+        g_local_scheduled_data_len = scheduled_data_len;
     }
 
     g_proto.update_pending_latched =
@@ -268,11 +240,9 @@ static void _local_data_init(void)
     }
 
     for (node_id = 0U; node_id < g_proto_cfg.p2_node_count; node_id++) {
-        g_proto.scheduled_class[node_id] =
-            _is_master() ? CLASS_MAX_ID :
-            frame_len_to_class((uint8_t)PACKET_P2_DATA_FRAME_HDR_LEN);
+        g_proto.scheduled_class[node_id] = frame_len_to_class((uint8_t)PACKET_P2_DATA_FRAME_HDR_LEN + MAX_DATA_LEN);
     }
-
+    g_proto.have_schedule = _is_master();
     data_len = _local_data_len_for_source(source_id);
     data_class = frame_len_to_class((uint8_t)(PACKET_P2_DATA_FRAME_HDR_LEN + data_len));
 
@@ -294,7 +264,7 @@ static void _load_local_desired_data_for_p2(void)
 
     data_len = _local_data_len_for_source(source_id);
     _build_local_data_with_len(data, data_len);
-    (void)store_import(&g_store, source_id, data, data_len);
+    (void)store_import(&g_store, source_id, data, 0, g_local_desired_class, data_len);
 }
 
 static void _load_local_scheduled_data_for_p2(void)
@@ -302,7 +272,7 @@ static void _load_local_scheduled_data_for_p2(void)
     uint8_t source_id = (uint8_t)LOCAL_NODE_ID;
 
     if (source_id < g_proto_cfg.p2_node_count) {
-        (void)store_import(&g_store, source_id, g_local_scheduled_data,
+        (void)store_import(&g_store, source_id, g_local_scheduled_data, g_proto.update_pending_latched, g_local_desired_class,
                            g_local_scheduled_data_len);
     }
 }
@@ -327,10 +297,10 @@ static void _handle_pre_commit_rx(const uint8_t *payload)
         return;
     }
 
-    if (!g_proto.pre_commit.have_schedule) {
+    if (!g_proto.have_schedule) {
         memcpy(g_proto.pre_commit.packed_schedule, frame.packed_schedule, packed_len);
         g_proto.pre_commit.packed_len = (uint8_t)packed_len;
-        g_proto.pre_commit.have_schedule = true;
+        g_proto.have_schedule = true;
     }
     g_proto.pre_commit.flag_tx = true;
     g_proto.pre_commit.rx_valid++;
@@ -343,7 +313,7 @@ static void _run_pre_commit_slot(void)
     uint32_t slot_active_end_ticks = slot_end_ticks - SLOT_PROCESSING_TICKS;
     uint32_t rx_window_end_ticks = slot_start_ticks + g_proto_cfg.p2_rx_window_ticks;
     uint32_t now_tick = nrf_sf_radio_now_ticks();
-    bool do_tx = g_proto.pre_commit.have_schedule &&
+    bool do_tx = g_proto.have_schedule &&
                  g_proto.pre_commit.flag_tx &&
                  (g_proto.pre_commit.ntx_done < NTX);
 
@@ -521,7 +491,7 @@ static void _log_round_summary_original(void)
            g_p2_diag.max_address_offset_ticks);
 }
 
-static void _log_round_summary_pre_p2(void)
+static void  _log_round_summary_pre_p2(void)
 {
     uint8_t local_pending_updates = (g_local_desired_class !=
                                      g_proto.scheduled_class[LOCAL_NODE_ID]) ? 1U : 0U;
@@ -557,32 +527,7 @@ static void _log_round_summary_pre_p2(void)
            g_round_count,
            (unsigned)g_proto.round_run_pre,
            (unsigned)g_proto.update_pending_latched);
-    printf("[tc] r=%" PRIu32 " pp2rx=%" PRIu32 "\n",
-           g_round_count,
-           g_proto.pre_p2.rx_valid);
-
     if (USE_PRE_P2) {
-        printf("[tc:precol] R=%" PRIu32 " txmiss=%" PRIu32 "\n",
-               g_round_count,
-               g_pre_diag.collect_tx_miss);
-        printf("[tc:precol] R=%" PRIu32 " rxmiss=%" PRIu32
-               " txerr=%" PRIu32 "\n",
-               g_round_count,
-               g_pre_diag.collect_rx_miss,
-               g_pre_diag.collect_tx_error);
-        printf("[tc:precol] R=%" PRIu32 " rx=%" PRIu32
-               " noaddr=%" PRIu32 "\n",
-               g_round_count,
-               g_pre_diag.collect_rx_attempts,
-               g_pre_diag.collect_no_address);
-        printf("[tc:precol] R=%" PRIu32 " end=%" PRIu32
-               " crc=%" PRIu32 "\n",
-               g_round_count,
-               g_pre_diag.collect_end_timeout,
-               g_pre_diag.collect_crc_error);
-        printf("[tc:precol] R=%" PRIu32 " reject=%" PRIu32 "\n",
-               g_round_count,
-               g_pre_diag.collect_reject);
         printf("[tc:precom] R=%" PRIu32 " txmiss=%" PRIu32 "\n",
                g_round_count,
                g_pre_diag.commit_tx_miss);
@@ -639,9 +584,6 @@ static void _log_round_summary_pre_p2(void)
                    &missing_map[offset]);
         }
     }
-    printf("[tc] r=%" PRIu32 " pp2sub=%u\n",
-           g_round_count,
-           (unsigned)PRE_P2_SUBSLOT_PERIOD_US);
     printf("[tc] r=%" PRIu32 " p2slot=%" PRIu32 "\n",
            g_round_count,
            NRF_SF_RADIO_TIMER_TICKS_TO_US(p2_slot_ticks));
@@ -692,7 +634,7 @@ static void _log_round_summary_pre_p2(void)
                g_proto.pre_commit.rx_valid);
         printf("[tc:u2] R=%" PRIu32 " have=%u\n",
                g_round_count,
-               (unsigned)g_proto.pre_commit.have_schedule);
+               (unsigned)g_proto.have_schedule);
         for (map_offset = 0U;
              map_offset < g_proto_cfg.p2_node_count;
              map_offset = (uint8_t)(map_offset + 16U)) {
@@ -727,20 +669,6 @@ static void _handle_p1_rx(const uint8_t *frame_buf, uint32_t rx_time)
     g_proto.rx_valid++;
 }
 
-static void _handle_pre_p2_rx(const uint8_t *frame_buf)
-{
-    pre_collect_frame_t frame;
-    uint8_t p2_frame_len;
-
-    if (!decode_pre_p2(frame_buf, &frame)) {
-        g_pre_diag.collect_reject++;
-        return;
-    }
-    p2_frame_len = class_to_frame_len(frame.class_id);
-
-    pre_p2_handle_rx(&g_proto, p2_frame_len, &g_proto_cfg);
-}
-
 static void _handle_p2_rx(const uint8_t *frame_buf)
 {
     p2_data_frame_t frame;
@@ -755,11 +683,8 @@ static void _handle_p2_rx(const uint8_t *frame_buf)
         return;
     }
 
-    if ((frame.flags & 1U) != 0U) {
-        g_proto.update_pending_latched = true;
-        if (_is_master()) {
-            g_proto.master_run_pre_next_round = true;
-        }
+    if ((frame.flags & 1U) != 0U && _is_master()) {
+        g_proto.master_run_pre_next_round = true;
     }
 }
 
@@ -785,11 +710,6 @@ static void _run_p1_slot(void)
     uint32_t now_tick = nrf_sf_radio_now_ticks();
 
     if ((int32_t)(now_tick - slot_start_ticks) >= 0) {
-        /*
-         * printf("[timecast] slot miss: slot=%u now=%" PRIu32 " start=%" PRIu32 "\n",
-         * (unsigned)g_proto.p1.slot_idx,
-         * now_tick, slot_start_ticks);
-         */
         (void)p1_finish_slot(&g_proto, &g_proto_cfg, do_tx);
         return;
     }
@@ -806,18 +726,8 @@ static void _run_p1_slot(void)
             p1_finish_slot(&g_proto, &g_proto_cfg, true);
         }
         else {
-            /* uint32_t failure_ticks = nrf_sf_radio_now_ticks(); */
-            /* int32_t slack_ticks = (int32_t)(slot_start_ticks - failure_ticks); */
 
             g_p1_tx_sched_fails++;
-            /*
-             * printf("[timecast] TX schedule failed: now=%" PRIu32
-             * " deadline=%" PRIu32 " slack=%" PRId32
-             * " ticks fails=%" PRIu32 "\n",
-             * failure_ticks,
-             * slot_start_ticks + NRF_SF_RADIO_RAMPUP_TIME_TICKS,
-             * slack_ticks, g_p1_tx_sched_fails);
-             */
 
             p1_finish_slot(&g_proto, &g_proto_cfg, false);
         }
@@ -828,92 +738,6 @@ static void _run_p1_slot(void)
     nrf_sf_radio_wait_until_abs(NULL, slot_active_end_ticks);
 
     p1_finish_slot(&g_proto, &g_proto_cfg, false);
-}
-
-static void _run_pre_p2_subslot(void)
-{
-    bool tx_slot = g_proto.pre_p2.tx_slot;
-    uint32_t subslot_start_ticks =
-        pre_p2_get_subslot_start_local_ticks(&g_proto, &g_proto_cfg);
-    uint32_t subslot_end_ticks = subslot_start_ticks + g_proto_cfg.pre_p2_subslot_ticks;
-    uint32_t subslot_active_end_ticks = subslot_end_ticks - PRE_P2_SLOT_PROCESSING_TICKS;
-    uint32_t rx_window_end_ticks = subslot_start_ticks + g_proto_cfg.pre_p2_rx_window_ticks;
-    uint32_t now_tick = nrf_sf_radio_now_ticks();
-    uint8_t owner_id = g_proto.pre_p2.subslot_idx;
-
-    if (tx_slot) {
-        pre_collect_frame_t frame;
-        uint8_t frame_buf[PACKET_PRE_P2_CTRL_FRAME_LEN] = { 0 };
-
-        if ((int32_t)(now_tick - subslot_start_ticks) >= 0) {
-            g_pre_diag.collect_tx_miss++;
-            /*
-             * printf("[timecast] pre-p2 TX miss: slot=%u sub=%u"
-             * " now=%" PRIu32 " deadline=%" PRIu32 "\n",
-             * (unsigned)g_proto.pre_p2.slot_idx,
-             * (unsigned)g_proto.pre_p2.subslot_idx,
-             * now_tick, subslot_start_ticks);
-             */
-            pre_p2_finish_subslot(&g_proto, &g_proto_cfg);
-            return;
-        }
-
-        if (!pre_p2_prepare_tx(&g_proto, &frame, owner_id)) {
-            nrf_sf_radio_wait_until_abs(NULL, subslot_active_end_ticks);
-            pre_p2_finish_subslot(&g_proto, &g_proto_cfg);
-            return;
-        }
-        encode_pre_p2(frame_buf, &frame);
-        if (!nrf_sf_radio_tx_start(frame_buf, subslot_start_ticks,
-                                   subslot_active_end_ticks,
-                                   PACKET_PRE_P2_CTRL_FRAME_LEN)) {
-            g_pre_diag.collect_tx_error++;
-        }
-        pre_p2_finish_subslot(&g_proto, &g_proto_cfg);
-        return;
-    }
-
-    if ((int32_t)(now_tick - subslot_start_ticks +
-                  NRF_SF_RADIO_US_TO_TIMER_TICKS(P2_RX_LEAD_US)) >= 0) {
-        g_pre_diag.collect_rx_miss++;
-        /*
-         * printf("[timecast] pre-p2 RX miss: slot=%u sub=%u"
-         * " now=%" PRIu32 " deadline=%" PRIu32 "\n",
-         * (unsigned)g_proto.pre_p2.slot_idx,
-         * (unsigned)g_proto.pre_p2.subslot_idx,
-         * now_tick, subslot_start_ticks);
-         */
-        pre_p2_finish_subslot(&g_proto, &g_proto_cfg);
-        return;
-    }
-    if (g_proto.pre_p2.present[owner_id]) {
-        nrf_sf_radio_wait_until_abs(NULL, subslot_active_end_ticks);
-        pre_p2_finish_subslot(&g_proto, &g_proto_cfg);
-        return;
-    }
-
-    uint8_t rx_status;
-    uint8_t *rx_frame = rx_buffer;
-
-    g_pre_diag.collect_rx_attempts++;
-    rx_status = nrf_sf_radio_rx_start(
-        &rx_frame,
-        subslot_start_ticks - NRF_SF_RADIO_US_TO_TIMER_TICKS(P2_RX_LEAD_US),
-        rx_window_end_ticks, subslot_active_end_ticks);
-    if (rx_status == 0U) {
-        _handle_pre_p2_rx(rx_frame);
-    }
-    else if (rx_status == 1U) {
-        g_pre_diag.collect_no_address++;
-    }
-    else if (rx_status == 2U) {
-        g_pre_diag.collect_end_timeout++;
-    }
-    else if (rx_status == 3U) {
-        g_pre_diag.collect_crc_error++;
-    }
-
-    pre_p2_finish_subslot(&g_proto, &g_proto_cfg);
 }
 
 static void _run_p2_subslot(void)
@@ -930,12 +754,6 @@ static void _run_p2_subslot(void)
     if (tx_slot) {
         if ((int32_t)(now_tick - subslot_start_ticks) >= 0) {
             g_p2_diag.subslot_miss++;
-            /*
-             * printf("[timecast] p2 miss: slot=%u sub=%u now=%" PRIu32 " deadline=%" PRIu32 "\n",
-             * (unsigned)g_proto.p2.slot_idx,
-             * (unsigned)g_proto.p2.subslot_idx,
-             * now_tick, subslot_start_ticks);
-             */
             (void)p2_finish_subslot(&g_proto, &g_proto_cfg);
             return;
         }
@@ -947,17 +765,11 @@ static void _run_p2_subslot(void)
             p2_finish_subslot(&g_proto, &g_proto_cfg);
             return;
         }
-        frame.flags = _local_packet_should_request_update(owner_id) ? 1U : 0U;
         encode_p2_data(frame_buf, &frame, data_ptr);
         if (!nrf_sf_radio_tx_start(frame_buf, subslot_start_ticks,
                                    subslot_active_end_ticks,
                                    PACKET_P2_DATA_FRAME_HDR_LEN +
                                    frame.data_len)) {
-            /*
-             * printf("[timecast] P2 TX schedule failed: slot=%u sub=%u\n",
-             * (unsigned)g_proto.p2.slot_idx,
-             * (unsigned)g_proto.p2.subslot_idx);
-             */
             p2_finish_subslot(&g_proto, &g_proto_cfg);
             return;
         }
@@ -972,12 +784,6 @@ static void _run_p2_subslot(void)
     if ((int32_t)(now_tick - rxen_ticks) >= 0) {
         g_p2_diag.subslot_miss++;
         g_p2_diag.rx_arm_late++;
-        /*
-         * printf("[timecast] p2 miss: slot=%u sub=%u now=%" PRIu32 " deadline=%" PRIu32 "\n",
-         * (unsigned)g_proto.p2.slot_idx,
-         * (unsigned)g_proto.p2.subslot_idx,
-         * now_tick, subslot_start_ticks);
-         */
         (void)p2_finish_subslot(&g_proto, &g_proto_cfg);
         return;
     }
@@ -1017,11 +823,9 @@ static void _run_p2_subslot(void)
     }
     else if (rx_status == 2U) {
         g_p2_diag.end_timeout++;
-        /* printf("[timecast-at] P2 RX end timeout\n"); */
     }
     else if (rx_status == 3U) {
         g_p2_diag.crc_error++;
-        /* printf("[timecast-at] P2 RX CRC error\n"); */
     }
 
     p2_finish_subslot(&g_proto, &g_proto_cfg);
@@ -1040,6 +844,10 @@ static void _prepare_local_data(void)
 
     g_local_desired_class =
         frame_len_to_class((uint8_t)(PACKET_P2_DATA_FRAME_HDR_LEN + data_len));
+    if(_is_master() && g_local_desired_class != g_proto.scheduled_class[0]) {
+        g_proto.master_run_pre_next_round = true;
+        g_proto.scheduled_class[0] = g_local_desired_class;
+    }
 }
 
 static void _run_p1_phase(uint32_t next_master_round_start_ticks)
@@ -1085,23 +893,8 @@ static void _run_round_original(uint32_t *next_master_round_start_ticks)
     }
 }
 
-static uint32_t _run_pre_p2_collect(uint32_t start_ticks)
-{
-    pre_p2_start(&g_proto, LOCAL_NODE_ID, start_ticks, &g_proto_cfg,
-                 class_to_frame_len(g_local_desired_class));
-
-    while (g_proto.pre_p2.active) {
-        _run_pre_p2_subslot();
-    }
-
-    return g_proto.pre_p2.commit_start_local_tick;
-}
-
 static uint32_t _run_pre_p2_commit(uint32_t start_ticks)
 {
-    if (_is_master()) {
-        build_schedule_from_pre_collect(&g_proto, &g_proto_cfg);
-    }
 
     pre_commit_start(&g_proto, start_ticks, &g_proto_cfg, _is_master());
 
@@ -1115,7 +908,6 @@ static uint32_t _run_pre_p2_commit(uint32_t start_ticks)
 static void _run_round_pre_p2(uint32_t *next_master_round_start_ticks)
 {
     uint32_t next_p1_phase_start_ticks;
-    uint32_t next_collect_phase_start_ticks;
     uint32_t p2_start_ticks;
 
     _prepare_local_data();
@@ -1132,20 +924,14 @@ static void _run_round_pre_p2(uint32_t *next_master_round_start_ticks)
     next_p1_phase_start_ticks = g_proto.p1.next_phase_start_local_ticks;
     p2_start_ticks = next_p1_phase_start_ticks;
     if (g_proto.round_run_pre) {
-        next_collect_phase_start_ticks = _run_pre_p2_collect(next_p1_phase_start_ticks);
 
-        p2_start_ticks = _run_pre_p2_commit(next_collect_phase_start_ticks);
+        p2_start_ticks = _run_pre_p2_commit(next_p1_phase_start_ticks);
 
-        if (g_proto.pre_commit.have_schedule) {
+        if (g_proto.have_schedule) {
             unpack_class_schedule(&g_proto,
                                   g_proto_cfg.p2_node_count);
             _commit_round_schedule();
-            apply_round_schedule_to_proto(&g_proto, &g_proto_cfg);
-            g_has_applied_schedule = true;
         }
-    }
-    else {
-        apply_round_schedule_to_proto(&g_proto, &g_proto_cfg);
     }
 
     g_round_p2_start_ticks = p2_start_ticks;
@@ -1203,7 +989,7 @@ int main(void)
             g_p2_success.total_present += g_store.present_count;
             g_p2_success.sample_rounds++;
         }
-        if ((g_round_count % 100U) == 0U) {
+        if ((g_round_count % 1U) == 0U) {
             if (USE_PRE_P2) {
                 _log_round_summary_pre_p2();
             }

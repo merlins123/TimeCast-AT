@@ -17,7 +17,6 @@ extern "C" {
 #endif
 
 #define PACKET_TYPE_P1_SYNC (0x01U)
-#define PACKET_TYPE_PRE_COL (0x02U)
 #define PACKET_TYPE_PRE_COM (0x03U)
 #define PACKET_TYPE_P2_DATA (0x04U)
 
@@ -39,11 +38,6 @@ typedef struct __attribute__((packed)) {
 
 typedef struct __attribute__((packed)) {
     uint8_t packet_type;
-    uint8_t class_id;
-} pre_collect_frame_t;
-
-typedef struct __attribute__((packed)) {
-    uint8_t packet_type;
     uint8_t packed_schedule[(TIMECAST_STORE_MAX_NODES + 1U) / 2U];
 } pre_commit_frame_t;
 
@@ -53,6 +47,7 @@ typedef struct __attribute__((packed)) {
     uint8_t slot_idx;
     uint8_t subslot_idx;
     uint8_t flags;
+    uint8_t desired_class;
     uint8_t data_len;
     uint32_t epoch;
 } p2_data_frame_t;
@@ -63,7 +58,6 @@ enum {
     PACKET_P2_DATA_MAX_DATA_LEN     = TIMECAST_STORE_MAX_DATA_LEN,
     PACKET_P2_DATA_MAX_FRAME_LEN    =
         PACKET_P2_DATA_FRAME_HDR_LEN + PACKET_P2_DATA_MAX_DATA_LEN,
-    PACKET_PRE_P2_CTRL_FRAME_LEN    = sizeof(pre_collect_frame_t),
     PACKET_PRE_COMMIT_MAX_FRAME_LEN = sizeof(pre_commit_frame_t)
 };
 
@@ -77,9 +71,6 @@ void encode_p2_data(uint8_t *dst,
 bool decode_p2_data(const uint8_t *frame_buf,
                     p2_data_frame_t *frame,
                     uint8_t *data_out);
-void encode_pre_p2(uint8_t *dst, const pre_collect_frame_t *frame);
-bool decode_pre_p2(const uint8_t *frame_buf,
-                   pre_collect_frame_t *frame);
 void encode_pre_commit(uint8_t *dst,
                        pre_commit_frame_t *frame,
                        size_t packed_len);
