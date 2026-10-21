@@ -20,6 +20,8 @@
 #include "nrf_clock.h"
 #include "radio_driver.h"
 #include "radio_internal.h"
+#include "syscfg/syscfg.h"
+#include "controller/ble_phy.h"
 
 static void _timer2_init(void);
 static int _timer_ppi_init(void);
@@ -37,8 +39,6 @@ static const uint8_t ble_hw_frequency_channels[40] = {
 #ifndef NRF_SF_RADIO_ACCESS_ADDRESS
 #  define NRF_SF_RADIO_ACCESS_ADDRESS (0x8389BED6u)
 #endif
-#define AA_PREFIX ((uint32_t)((NRF_SF_RADIO_ACCESS_ADDRESS >> 24) & 0xFFu))
-#define AA_BASE   ((uint32_t)((NRF_SF_RADIO_ACCESS_ADDRESS << 8) & 0xFFFFFF00u))
 
 #define READY_TIME_PPI_CH   (9U)
 #define END_TIME_PPI_CH     (10U)
@@ -244,78 +244,24 @@ void nrf_sf_radio_set_ble_channel(uint8_t channel)
 
 void nrf_sf_radio_set_power(int16_t power)
 {
-    if (power > 2) {
-        NRF_RADIO->TXPOWER = RADIO_TXPOWER_TXPOWER_Pos4dBm;
-    }
-    else if (power > -2) {
-        NRF_RADIO->TXPOWER = RADIO_TXPOWER_TXPOWER_0dBm;
-    }
-    else if (power > -6) {
-        NRF_RADIO->TXPOWER = RADIO_TXPOWER_TXPOWER_Neg4dBm;
-    }
-    else if (power > -10) {
-        NRF_RADIO->TXPOWER = RADIO_TXPOWER_TXPOWER_Neg8dBm;
-    }
-    else if (power > -14) {
-        NRF_RADIO->TXPOWER = RADIO_TXPOWER_TXPOWER_Neg12dBm;
-    }
-    else if (power > -18) {
-        NRF_RADIO->TXPOWER = RADIO_TXPOWER_TXPOWER_Neg16dBm;
-    }
-    else if (power > -25) {
-        NRF_RADIO->TXPOWER = RADIO_TXPOWER_TXPOWER_Neg20dBm;
-    }
-    else {
-        NRF_RADIO->TXPOWER = RADIO_TXPOWER_TXPOWER_Neg30dBm;
-    }
+    ble_phy_tx_power_set(power);
 }
 
 static void _init_radio(void)
 {
-    clock_hfxo_request();
+    ble_phy_rfclk_enable();
 
-    NRF_RADIO->POWER = 1;
-    NRF_RADIO->TASKS_DISABLE = 1;
-    NRF_RADIO->EVENTS_DISABLED = 0;
-    NRF_RADIO->EVENTS_END = 0;
-    NRF_RADIO->EVENTS_ADDRESS = 0;
+    ble_phy_init();
 
-    NRF_RADIO->MODE = RADIO_MODE_MODE_Ble_1Mbit;
-    uint32_t modecnf0 = (RADIO_MODECNF0_DTX_Center << RADIO_MODECNF0_DTX_Pos);
-#if NRF_SF_RADIO_FAST_RAMPUP
-    modecnf0 |= (RADIO_MODECNF0_RU_Fast << RADIO_MODECNF0_RU_Pos);
-#else
-    modecnf0 |= (RADIO_MODECNF0_RU_Default << RADIO_MODECNF0_RU_Pos);
-#endif
-    NRF_RADIO->MODECNF0 = modecnf0;
-
-    NRF_RADIO->TXPOWER = RADIO_TXPOWER_TXPOWER_0dBm;
-    NRF_RADIO->FREQUENCY = ble_hw_frequency_channels[37];
-    NRF_RADIO->DATAWHITEIV = 37;
-
-    NRF_RADIO->PREFIX0 = AA_PREFIX;
-    NRF_RADIO->BASE0 = AA_BASE;
-    NRF_RADIO->TXADDRESS = 0;
-    NRF_RADIO->RXADDRESSES = 1;
+    NVIC_DisableIRQ(RADIO_IRQn);
+    ble_phy_disable();
+    NRF_RADIO->INTENCLR = 0xffffffffUL;
+    NRF_PPI->CHENCLR = PPI_CHEN_CH26_Msk | PPI_CHEN_CH27_Msk;
 
 
-    NRF_RADIO->PCNF0 = (1 << RADIO_PCNF0_S0LEN_Pos) |
-                       (8 << RADIO_PCNF0_LFLEN_Pos) |
-                       (RADIO_PCNF0_PLEN_8bit << RADIO_PCNF0_PLEN_Pos) |
-                       (RADIO_PCNF0_S1INCL_Automatic <<
-                        RADIO_PCNF0_S1INCL_Pos) |
-                       (0 << RADIO_PCNF0_S1LEN_Pos);
-    NRF_RADIO->PCNF1 = (251 << RADIO_PCNF1_MAXLEN_Pos) |
-                       (3 << RADIO_PCNF1_BALEN_Pos) |
-                       (RADIO_PCNF1_ENDIAN_Little << RADIO_PCNF1_ENDIAN_Pos) |
-                       (RADIO_PCNF1_WHITEEN_Enabled << RADIO_PCNF1_WHITEEN_Pos);
-
-    NRF_RADIO->CRCCNF = (RADIO_CRCCNF_LEN_Three << RADIO_CRCCNF_LEN_Pos) |
-                        (RADIO_CRCCNF_SKIPADDR_Skip << RADIO_CRCCNF_SKIPADDR_Pos);
-    NRF_RADIO->CRCINIT = 0x555555;
-    NRF_RADIO->CRCPOLY = 0x00065B;
-
-    NRF_RADIO->SHORTS = (RADIO_SHORTS_END_DISABLE_Enabled << RADIO_SHORTS_END_DISABLE_Pos);
+    ble_phy_tx_power_set(0);
+    ble_phy_setchan(37, NRF_SF_RADIO_ACCESS_ADDRESS, 0x555555);
+    NRF_RADIO->SHORTS = RADIO_SHORTS_END_DISABLE_Msk;
 }
 
 void nrf_sf_radio_start(void)

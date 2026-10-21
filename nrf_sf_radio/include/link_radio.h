@@ -38,6 +38,11 @@ extern "C" {
 #define NRF_SF_RADIO_LENGTH_LEN      (1U)
 
 /**
+ * @brief   Length of the S1 field in bytes.
+ */
+#define NRF_SF_RADIO_S1_LEN          (1U)
+
+/**
  * @brief   Length of the advertising address field in bytes.
  */
 #define NRF_SF_RADIO_ADV_ADDR_LEN    (6U)

@@ -23,7 +23,6 @@ extern "C" {
 
 typedef struct {
     bool present;
-    uint8_t flag;
     uint8_t len;
     uint8_t desired_class;
     uint8_t data[TIMECAST_STORE_MAX_DATA_LEN];
@@ -36,7 +35,7 @@ typedef struct {
 
 void store_init(timecast_store_t *store);
 bool store_import(timecast_store_t *store, uint8_t node_id,
-                  const void *data, uint8_t flag, uint8_t desired_class, uint8_t len);
+                  const void *data, uint8_t desired_class, uint8_t len);
 bool store_has_data(const timecast_store_t *store, uint8_t node_id);
 uint16_t store_present_count(const timecast_store_t *store);
 

@@ -29,16 +29,13 @@
 #  error "NTX exceeds 7-bit packed relay_cnt budget"
 #endif
 
-static uint8_t rx_buffer[255] = { 0 };
+static uint8_t rx_buffer[258] = { 0 };
 
 #define P1_SLOT_TICKS         NRF_SF_RADIO_US_TO_TIMER_TICKS(P1_SLOT_US)
 #define P2_SUBSLOT_TICKS      NRF_SF_RADIO_US_TO_TIMER_TICKS(P2_SUBSLOT_US)
 #define P1_SLOT_ACTIVE_US     (P1_SLOT_US - SLOT_PROCESSING_US)
-#define P2_SUBSLOT_PERIOD_US  (P2_SUBSLOT_US + P2_SUBSLOT_GUARD_US)
-#define P1_SYNC_DURATION_TICKS ((uint32_t)(2U * NTX) * P1_SLOT_TICKS)
 #define P1_SLOT_ACTIVE_TICKS  NRF_SF_RADIO_US_TO_TIMER_TICKS(P1_SLOT_ACTIVE_US)
 #define SLOT_PROCESSING_TICKS NRF_SF_RADIO_US_TO_TIMER_TICKS(SLOT_PROCESSING_US)
-#define P2_SUBSLOT_PERIOD_TICKS NRF_SF_RADIO_US_TO_TIMER_TICKS(P2_SUBSLOT_PERIOD_US)
 
 static timecast_store_t g_store;
 static timecast_protocol_state_t g_proto;
@@ -47,7 +44,6 @@ static uint32_t g_round_p2_start_ticks;
 static uint8_t g_local_desired_class;
 static uint8_t g_local_scheduled_data_len;
 static uint8_t g_local_scheduled_data[TIMECAST_STORE_MAX_DATA_LEN];
-static uint32_t g_p1_tx_sched_fails;
 static struct {
     uint32_t subslot_miss;
     uint32_t rx_attempts;
@@ -63,16 +59,6 @@ static struct {
     uint64_t total_present;
     uint32_t sample_rounds;
 } g_p2_success;
-static struct {
-    uint32_t commit_tx_miss;
-    uint32_t commit_rx_miss;
-    uint32_t commit_tx_error;
-    uint32_t commit_rx_attempts;
-    uint32_t commit_no_address;
-    uint32_t commit_end_timeout;
-    uint32_t commit_crc_error;
-    uint32_t commit_reject;
-} g_pre_diag;
 
 static bool _is_master(void);
 
@@ -82,6 +68,7 @@ static timecast_protocol_cfg_t g_proto_cfg = {
     .p2_ntx = P2_NTX,
     .p2_node_count = P2_NODE_COUNT,
     .glossy_slot_ticks = P1_SLOT_TICKS,
+    .packed_schedule_ticks = NRF_SF_RADIO_US_TO_TIMER_TICKS(((P2_NODE_COUNT + 1U) / 2U) * 8U),
     .p1_rx_ts_to_slot_start_ticks = NRF_SF_RADIO_US_TO_TIMER_TICKS(P1_RX_TS_TO_SLOT_START_US),
     .p1_guard_ticks = NRF_SF_RADIO_US_TO_TIMER_TICKS(P2_START_GUARD_US),
     .p2_subslot_ticks = P2_SUBSLOT_TICKS,
@@ -93,47 +80,18 @@ static timecast_protocol_cfg_t g_proto_cfg = {
     .p2_payload_byte_ticks = NRF_SF_RADIO_US_TO_TIMER_TICKS(8U),
 };
 
-static uint32_t _p2_duration_ticks(uint8_t node_count)
-{
-    return ((uint32_t)(2U * P2_NTX) * (uint32_t)node_count * P2_SUBSLOT_PERIOD_TICKS);
-}
-
-static uint32_t _fixed_p2_slot_ticks(void)
-{
-    return (uint32_t)g_proto_cfg.p2_node_count *
-           (g_proto_cfg.p2_subslot_ticks + g_proto_cfg.p2_guard_ticks);
-}
-
-static uint32_t _original_p2_duration_ticks(void)
-{
-    return _p2_duration_ticks(g_proto_cfg.p2_node_count);
-}
-
-static uint32_t _pre_commit_duration_ticks(uint32_t slot_ticks)
-{
-    return (uint32_t)(2U * NTX) * slot_ticks;
-}
-
-static uint32_t _original_round_period_ticks(void)
-{
-    uint32_t period_ticks = P1_SYNC_DURATION_TICKS + g_proto_cfg.p1_guard_ticks;
-
-    period_ticks += _original_p2_duration_ticks();
-
-    return period_ticks + NRF_SF_RADIO_US_TO_TIMER_TICKS(ROUND_GAP_US);
-}
-
 static uint32_t _improved_round_period_ticks(bool run_pre)
 {
-    uint32_t period_ticks = P1_SYNC_DURATION_TICKS + g_proto_cfg.p1_guard_ticks;
+    uint32_t p1_slot_ticks = g_proto_cfg.glossy_slot_ticks;
 
     if (run_pre) {
-        period_ticks += _pre_commit_duration_ticks(g_proto.pre_commit.slot_ticks);
-        period_ticks += g_proto_cfg.p1_guard_ticks;
+        p1_slot_ticks += g_proto_cfg.packed_schedule_ticks;
     }
 
-    period_ticks += (uint32_t)(2U * P2_NTX) * p2_get_slot_ticks(&g_proto, &g_proto_cfg);
-    return period_ticks + NRF_SF_RADIO_US_TO_TIMER_TICKS(ROUND_GAP_US);
+    return 2U * NTX * p1_slot_ticks
+        + g_proto_cfg.p1_guard_ticks
+        + 2U * P2_NTX * p2_get_slot_ticks(&g_proto, &g_proto_cfg)
+        + NRF_SF_RADIO_US_TO_TIMER_TICKS(ROUND_GAP_US);
 }
 
 static bool _is_master(void)
@@ -175,11 +133,10 @@ static void _format_class_map(char *dst, size_t dst_len,
     dst[g_proto_cfg.p2_node_count] = '\0';
 }
 
-static uint8_t _local_data_len_for_source(uint8_t source_id)
+static uint8_t _local_data_len_for_source(void)
 {
-    (void)source_id;
 #if (TEST_NODE2_CLASS_PERIOD > 0U)
-    if (source_id == 2U) {
+    if (LOCAL_NODE_ID == 2U) {
         uint32_t round_idx = (g_round_count > 0U) ? (g_round_count - 1U) : 0U;
         uint32_t class_span = (uint32_t)TEST_NODE2_CLASS_MAX -
                               (uint32_t)TEST_NODE2_CLASS_MIN + 1U;
@@ -200,7 +157,7 @@ static void _build_local_data_with_len(uint8_t *dst, uint8_t data_len)
     memset(dst, 'c', (size_t)data_len);
 }
 
-static void _commit_round_schedule(void)
+static void _apply_round_schedule(void)
 {
     uint8_t local_source_id = (uint8_t)LOCAL_NODE_ID;
     uint8_t data[TIMECAST_STORE_MAX_DATA_LEN];
@@ -213,7 +170,7 @@ static void _commit_round_schedule(void)
         class_to_frame_len(g_proto.scheduled_class[local_source_id]);
     scheduled_data_len = (uint8_t)(scheduled_p2_frame_len -
                                    PACKET_P2_DATA_FRAME_HDR_LEN);
-    desired_data_len = _local_data_len_for_source(local_source_id);
+    desired_data_len = _local_data_len_for_source();
     if ((desired_data_len <= scheduled_data_len) ) {
         data_len = desired_data_len;
         _build_local_data_with_len(data, data_len);
@@ -223,8 +180,6 @@ static void _commit_round_schedule(void)
         g_local_scheduled_data_len = scheduled_data_len;
     }
 
-    g_proto.update_pending_latched =
-        g_local_desired_class != g_proto.scheduled_class[local_source_id];
 }
 
 static void _local_data_init(void)
@@ -243,7 +198,7 @@ static void _local_data_init(void)
         g_proto.scheduled_class[node_id] = frame_len_to_class((uint8_t)PACKET_P2_DATA_FRAME_HDR_LEN + MAX_DATA_LEN);
     }
     g_proto.have_schedule = _is_master();
-    data_len = _local_data_len_for_source(source_id);
+    data_len = _local_data_len_for_source();
     data_class = frame_len_to_class((uint8_t)(PACKET_P2_DATA_FRAME_HDR_LEN + data_len));
 
     _build_local_data_with_len(data, data_len);
@@ -251,9 +206,6 @@ static void _local_data_init(void)
     g_local_scheduled_data_len = data_len;
 
     g_local_desired_class = data_class;
-    if (g_local_desired_class != g_proto.scheduled_class[source_id]) {
-        g_proto.update_pending_latched = true;
-    }
 }
 
 static void _load_local_desired_data_for_p2(void)
@@ -262,9 +214,9 @@ static void _load_local_desired_data_for_p2(void)
     uint8_t data[TIMECAST_STORE_MAX_DATA_LEN];
     uint8_t data_len;
 
-    data_len = _local_data_len_for_source(source_id);
+    data_len = _local_data_len_for_source();
     _build_local_data_with_len(data, data_len);
-    (void)store_import(&g_store, source_id, data, 0, g_local_desired_class, data_len);
+    (void)store_import(&g_store, source_id, data, g_local_desired_class, data_len);
 }
 
 static void _load_local_scheduled_data_for_p2(void)
@@ -272,7 +224,7 @@ static void _load_local_scheduled_data_for_p2(void)
     uint8_t source_id = (uint8_t)LOCAL_NODE_ID;
 
     if (source_id < g_proto_cfg.p2_node_count) {
-        (void)store_import(&g_store, source_id, g_local_scheduled_data, g_proto.update_pending_latched, g_local_desired_class,
+        (void)store_import(&g_store, source_id, g_local_scheduled_data, g_local_desired_class,
                            g_local_scheduled_data_len);
     }
 }
@@ -284,91 +236,6 @@ static uint32_t _elapsed_since_ticks(uint32_t start_ticks, uint32_t now_tick)
     }
 
     return now_tick - start_ticks;
-}
-
-static void _handle_pre_commit_rx(const uint8_t *payload)
-{
-    pre_commit_frame_t frame;
-    size_t packed_len = 0U;
-
-    if (!decode_pre_commit(payload, g_proto_cfg.p2_node_count, &frame,
-                           &packed_len)) {
-        g_pre_diag.commit_reject++;
-        return;
-    }
-
-    if (!g_proto.have_schedule) {
-        memcpy(g_proto.pre_commit.packed_schedule, frame.packed_schedule, packed_len);
-        g_proto.pre_commit.packed_len = (uint8_t)packed_len;
-        g_proto.have_schedule = true;
-    }
-    g_proto.pre_commit.flag_tx = true;
-    g_proto.pre_commit.rx_valid++;
-}
-
-static void _run_pre_commit_slot(void)
-{
-    uint32_t slot_start_ticks = pre_commit_slot_start_ticks(&g_proto);
-    uint32_t slot_end_ticks = slot_start_ticks + g_proto.pre_commit.slot_ticks;
-    uint32_t slot_active_end_ticks = slot_end_ticks - SLOT_PROCESSING_TICKS;
-    uint32_t rx_window_end_ticks = slot_start_ticks + g_proto_cfg.p2_rx_window_ticks;
-    uint32_t now_tick = nrf_sf_radio_now_ticks();
-    bool do_tx = g_proto.have_schedule &&
-                 g_proto.pre_commit.flag_tx &&
-                 (g_proto.pre_commit.ntx_done < NTX);
-
-    if ((int32_t)(now_tick - slot_start_ticks) >= 0) {
-        if (do_tx) {
-            g_pre_diag.commit_tx_miss++;
-        }
-        else {
-            g_pre_diag.commit_rx_miss++;
-        }
-        pre_commit_finish_slot(&g_proto, do_tx, NTX);
-        return;
-    }
-
-    if (do_tx) {
-        uint8_t frame_buf[PACKET_PRE_COMMIT_MAX_FRAME_LEN] = { 0 };
-        pre_commit_frame_t frame;
-
-        pre_commit_prepare_tx(&g_proto, &frame);
-        encode_pre_commit(frame_buf, &frame,
-                          g_proto.pre_commit.packed_len);
-
-        if (!nrf_sf_radio_tx_start(frame_buf, slot_start_ticks,
-                                   slot_active_end_ticks,
-                                   g_proto.pre_commit.packed_len + 1)) {
-            g_pre_diag.commit_tx_error++;
-        }
-
-        g_proto.pre_commit.ntx_done++;
-        pre_commit_finish_slot(&g_proto, do_tx, NTX);
-        return;
-    }
-
-    uint8_t rx_status;
-    uint8_t *rx_frame = rx_buffer;
-
-    g_pre_diag.commit_rx_attempts++;
-    rx_status = nrf_sf_radio_rx_start(
-        &rx_frame,
-        slot_start_ticks - NRF_SF_RADIO_US_TO_TIMER_TICKS(P2_RX_LEAD_US),
-        rx_window_end_ticks, slot_active_end_ticks + NRF_SF_RADIO_US_TO_TIMER_TICKS(20));
-    if (rx_status == 0U) {
-        _handle_pre_commit_rx(rx_frame);
-    }
-    else if (rx_status == 1U) {
-        g_pre_diag.commit_no_address++;
-    }
-    else if (rx_status == 2U) {
-        g_pre_diag.commit_end_timeout++;
-    }
-    else if (rx_status == 3U) {
-        g_pre_diag.commit_crc_error++;
-    }
-
-    pre_commit_finish_slot(&g_proto, do_tx, NTX);
 }
 
 static void _log_p2_success_rate(uint16_t present_count)
@@ -396,117 +263,21 @@ static void _log_p2_success_rate(uint16_t present_count)
            g_p2_success.sample_rounds);
 }
 
-static void _log_round_summary_original(void)
+static void _log_round_summary(void)
 {
-    uint32_t now_tick = nrf_sf_radio_now_ticks();
-    uint32_t p2_duration_ticks = _elapsed_since_ticks(g_round_p2_start_ticks, now_tick);
-    uint16_t present_count = store_present_count(&g_store);
-    uint32_t p2_slot_ticks = _fixed_p2_slot_ticks();
-    char missing_map[TIMECAST_STORE_MAX_NODES + 1U];
-
-    printf("[tc] r=%" PRIu32 " id=%u role=%s\n",
-           g_round_count,
-           (unsigned)LOCAL_NODE_ID,
-           _is_master() ? "master" : "follower");
-
-    printf("[tc] r=%" PRIu32 " e=%" PRIu32 "\n",
-           g_round_count,
-           g_proto.current_epoch);
-    printf("[tc] r=%" PRIu32 " j=%u h=%u\n",
-           g_round_count,
-           (unsigned)g_proto.joined,
-           (unsigned)g_proto.p1.local_hop);
-    printf("[tc] r=%" PRIu32 " ss=%u rx=%" PRIu32 "\n",
-           g_round_count,
-           (unsigned)g_proto.p1.slot_idx,
-           g_proto.rx_valid);
-    printf("[tc] r=%" PRIu32 " p2rx=%" PRIu32 "\n",
-           g_round_count,
-           g_proto.p2.rx_valid);
-    printf("[tc] r=%" PRIu32 " p2store=%" PRIu32 "\n",
-           g_round_count,
-           g_proto.p2.store_updates);
-
-    _log_p2_success_rate(present_count);
-
-    printf("[tc] r=%" PRIu32 " present=%u/%u\n",
-           g_round_count,
-           (unsigned)present_count,
-           (unsigned)P2_NODE_COUNT);
-    printf("[tc] r=%" PRIu32 " p1slot=%u\n",
-           g_round_count,
-           (unsigned)P1_SLOT_US);
-
-    if (present_count < g_proto_cfg.p2_node_count) {
-        for (uint8_t id = 0U; id < g_proto_cfg.p2_node_count; id++) {
-            missing_map[id] = g_store.entries[id].present ? '.' : 'X';
-        }
-        missing_map[g_proto_cfg.p2_node_count] = '\0';
-        for (uint8_t offset = 0U; offset < g_proto_cfg.p2_node_count;
-             offset = (uint8_t)(offset + 16U)) {
-            uint8_t map_len =
-                (uint8_t)(g_proto_cfg.p2_node_count - offset);
-
-            if (map_len > 16U) {
-                map_len = 16U;
-            }
-            printf("[tc:miss] R=%" PRIu32 " o=%u %.*s\n",
-                   g_round_count,
-                   (unsigned)offset,
-                   (int)map_len,
-                   &missing_map[offset]);
-        }
-    }
-
-    printf("[tc] r=%" PRIu32 " p2slot=%" PRIu32 "\n",
-           g_round_count,
-           NRF_SF_RADIO_TIMER_TICKS_TO_US(p2_slot_ticks));
-    printf("[tc] r=%" PRIu32 " p2rdu=%" PRIu32 "\n",
-           g_round_count,
-           NRF_SF_RADIO_TIMER_TICKS_TO_US(p2_duration_ticks));
-
-    printf("[tc] r=%" PRIu32 " p2start=%" PRIu32 "\n",
-           g_round_count,
-           NRF_SF_RADIO_TIMER_TICKS_TO_US(g_round_p2_start_ticks));
-    printf("[tc:d1] R=%" PRIu32 " m=%" PRIu32 "\n",
-           g_round_count,
-           g_p2_diag.subslot_miss);
-    printf("[tc:d1] R=%" PRIu32 " a=%" PRIu32 " l=%" PRIu32 "\n",
-           g_round_count,
-           g_p2_diag.rx_attempts,
-           g_p2_diag.rx_arm_late);
-    printf("[tc:d2] R=%" PRIu32 " n=%" PRIu32 "\n",
-           g_round_count,
-           g_p2_diag.no_address);
-    printf("[tc:d2] R=%" PRIu32 " e=%" PRIu32 " c=%" PRIu32 "\n",
-           g_round_count,
-           g_p2_diag.end_timeout,
-           g_p2_diag.crc_error);
-    printf("[tc:d3] R=%" PRIu32 " r=%" PRIu32 "\n",
-           g_round_count,
-           g_p2_diag.reject);
-    printf("[tc:d3] R=%" PRIu32 " s=%" PRId32 " o=%" PRIu32 "\n",
-           g_round_count,
-           g_p2_diag.min_arm_slack_ticks,
-           g_p2_diag.max_address_offset_ticks);
-}
-
-static void  _log_round_summary_pre_p2(void)
-{
-    uint8_t local_pending_updates = (g_local_desired_class !=
-                                     g_proto.scheduled_class[LOCAL_NODE_ID]) ? 1U : 0U;
+    uint8_t local_pending_updates = (USE_PRE_P2 &&
+                                    (g_local_desired_class !=
+                                     g_proto.scheduled_class[LOCAL_NODE_ID])) ? 1U : 0U;
     uint32_t now_tick = nrf_sf_radio_now_ticks();
     uint32_t p2_duration_ticks = _elapsed_since_ticks(g_round_p2_start_ticks, now_tick);
     uint16_t present_count = store_present_count(&g_store);
     uint32_t p2_slot_ticks = p2_get_slot_ticks(&g_proto, &g_proto_cfg);
-    bool log_update_state = g_proto.round_run_pre ||
-                            g_proto.update_pending_latched ||
-                            (local_pending_updates > 0U) ||
-                            g_proto.master_run_pre_next_round ||
-                            (g_proto.master_p2_incomplete_rounds > 0U);
+    bool log_update_state = USE_PRE_P2 &&
+                            (g_proto.round_run_pre ||
+                             (local_pending_updates > 0U) ||
+                             g_proto.master_run_pre_next_round ||
+                             (g_proto.master_p2_incomplete_rounds > 0U));
     char missing_map[TIMECAST_STORE_MAX_NODES + 1U];
-    char scheduled_class_map[TIMECAST_STORE_MAX_NODES + 1];
-    char desired_class_map[TIMECAST_STORE_MAX_NODES + 1];
 
     printf("[tc] r=%" PRIu32 " id=%u role=%s\n",
            g_round_count,
@@ -519,36 +290,15 @@ static void  _log_round_summary_pre_p2(void)
            g_round_count,
            (unsigned)g_proto.joined,
            (unsigned)g_proto.p1.local_hop);
-    printf("[tc] r=%" PRIu32 " ss=%u p1rx=%" PRIu32 "\n",
+    printf("[tc] r=%" PRIu32 " ss=%u %s=%" PRIu32 "\n",
            g_round_count,
            (unsigned)g_proto.p1.slot_idx,
+           USE_PRE_P2 ? "p1rx" : "rx",
            g_proto.rx_valid);
-    printf("[tc] r=%" PRIu32 " pre=%u upd=%u\n",
-           g_round_count,
-           (unsigned)g_proto.round_run_pre,
-           (unsigned)g_proto.update_pending_latched);
     if (USE_PRE_P2) {
-        printf("[tc:precom] R=%" PRIu32 " txmiss=%" PRIu32 "\n",
+        printf("[tc] r=%" PRIu32 " pre=%u \n",
                g_round_count,
-               g_pre_diag.commit_tx_miss);
-        printf("[tc:precom] R=%" PRIu32 " rxmiss=%" PRIu32
-               " txerr=%" PRIu32 "\n",
-               g_round_count,
-               g_pre_diag.commit_rx_miss,
-               g_pre_diag.commit_tx_error);
-        printf("[tc:precom] R=%" PRIu32 " rx=%" PRIu32
-               " noaddr=%" PRIu32 "\n",
-               g_round_count,
-               g_pre_diag.commit_rx_attempts,
-               g_pre_diag.commit_no_address);
-        printf("[tc:precom] R=%" PRIu32 " end=%" PRIu32
-               " crc=%" PRIu32 "\n",
-               g_round_count,
-               g_pre_diag.commit_end_timeout,
-               g_pre_diag.commit_crc_error);
-        printf("[tc:precom] R=%" PRIu32 " reject=%" PRIu32 "\n",
-               g_round_count,
-               g_pre_diag.commit_reject);
+               (unsigned)g_proto.round_run_pre);
     }
     printf("[tc] r=%" PRIu32 " p2rx=%" PRIu32 "\n",
            g_round_count,
@@ -617,6 +367,8 @@ static void  _log_round_summary_pre_p2(void)
            g_p2_diag.max_address_offset_ticks);
     if (log_update_state) {
         uint8_t map_offset;
+        char scheduled_class_map[TIMECAST_STORE_MAX_NODES + 1U];
+        char desired_class_map[TIMECAST_STORE_MAX_NODES + 1U];
 
         _format_class_map(scheduled_class_map, sizeof(scheduled_class_map),
                           g_proto.scheduled_class, false);
@@ -629,9 +381,6 @@ static void  _log_round_summary_pre_p2(void)
         printf("[tc:u1] R=%" PRIu32 " inc=%" PRIu32 "\n",
                g_round_count,
                g_proto.master_p2_incomplete_rounds);
-        printf("[tc:u2] R=%" PRIu32 " pcrx=%" PRIu32 "\n",
-               g_round_count,
-               g_proto.pre_commit.rx_valid);
         printf("[tc:u2] R=%" PRIu32 " have=%u\n",
                g_round_count,
                (unsigned)g_proto.have_schedule);
@@ -665,7 +414,7 @@ static void _handle_p1_rx(const uint8_t *frame_buf, uint32_t rx_time)
     if (!decode_p1_sync(frame_buf, &frame)) {
         return;
     }
-    p1_handle_rx(&g_proto, &frame, rx_time - NRF_SF_RADIO_RAMPUP_TIME_TICKS, &g_proto_cfg);
+    p1_handle_rx(&g_proto, &frame, frame_buf, rx_time - NRF_SF_RADIO_RAMPUP_TIME_TICKS, &g_proto_cfg);
     g_proto.rx_valid++;
 }
 
@@ -683,9 +432,6 @@ static void _handle_p2_rx(const uint8_t *frame_buf)
         return;
     }
 
-    if ((frame.flags & 1U) != 0U && _is_master()) {
-        g_proto.master_run_pre_next_round = true;
-    }
 }
 
 static void _scan_until_reference(void)
@@ -694,7 +440,7 @@ static void _scan_until_reference(void)
            !g_proto.p1.has_tref) {
         uint8_t *rx_frame = rx_buffer;
         uint32_t rx_ticks = nrf_sf_radio_rx_listen_until_packet(
-            &rx_frame, P1_SLOT_TICKS, P1_SCAN_LOG_INTERVAL_US);
+            &rx_frame, P1_SLOT_TICKS + g_proto_cfg.packed_schedule_ticks, P1_SCAN_LOG_INTERVAL_US);
 
         if (rx_ticks > 2U) {
             _handle_p1_rx(rx_frame, rx_ticks);
@@ -710,25 +456,26 @@ static void _run_p1_slot(void)
     uint32_t now_tick = nrf_sf_radio_now_ticks();
 
     if ((int32_t)(now_tick - slot_start_ticks) >= 0) {
-        (void)p1_finish_slot(&g_proto, &g_proto_cfg, do_tx);
+        p1_finish_slot(&g_proto, &g_proto_cfg, do_tx);
         return;
     }
-
+    if(g_proto.round_run_pre) {
+        slot_active_end_ticks += g_proto_cfg.packed_schedule_ticks;
+    }
     if (do_tx) {
         p1_sync_frame_t frame;
-        uint8_t frame_buf[PACKET_P1_SYNC_FRAME_LEN] = { 0 };
+        uint8_t frame_buf[PACKET_P1_SYNC_MAX_FRAME_LEN] = { 0 };
         p1_prepare_tx(&g_proto, &frame);
-        encode_p1_sync(frame_buf, &frame);
+        size_t frame_len = encode_p1_sync(frame_buf, &frame,
+                                          g_proto.scheduled_class,
+                                          g_proto_cfg.p2_node_count);
         if (nrf_sf_radio_tx_start(frame_buf,
                                   slot_start_ticks,
                                   slot_active_end_ticks,
-                                  PACKET_P1_SYNC_FRAME_LEN)) {
+                                  frame_len)) {
             p1_finish_slot(&g_proto, &g_proto_cfg, true);
         }
         else {
-
-            g_p1_tx_sched_fails++;
-
             p1_finish_slot(&g_proto, &g_proto_cfg, false);
         }
 
@@ -760,7 +507,7 @@ static void _run_p2_subslot(void)
         p2_data_frame_t frame;
         const uint8_t *data_ptr = NULL;
         uint8_t frame_buf[PACKET_P2_DATA_MAX_FRAME_LEN] = { 0 };
-        if (!p2_prepare_tx(&g_proto, &g_store, &g_proto_cfg, &frame, &data_ptr)) {
+        if (!p2_prepare_tx(&g_proto, &g_store, &frame, &data_ptr)) {
             nrf_sf_radio_wait_until_abs(NULL, subslot_active_end_ticks);
             p2_finish_subslot(&g_proto, &g_proto_cfg);
             return;
@@ -840,7 +587,7 @@ static void _wait_until_round_end(void)
 
 static void _prepare_local_data(void)
 {
-    uint8_t data_len = _local_data_len_for_source(LOCAL_NODE_ID);
+    uint8_t data_len = _local_data_len_for_source();
 
     g_local_desired_class =
         frame_len_to_class((uint8_t)(PACKET_P2_DATA_FRAME_HDR_LEN + data_len));
@@ -855,11 +602,9 @@ static void _run_p1_phase(uint32_t next_master_round_start_ticks)
     if (_is_master()) {
         p1_start(&g_proto, next_master_round_start_ticks,
                  &g_proto_cfg, true, g_round_count);
-        g_p1_tx_sched_fails = 0U;
     }
     else {
         p1_start(&g_proto, 0U, &g_proto_cfg, false, 0U);
-        g_p1_tx_sched_fails = 0U;
         _scan_until_reference();
     }
 
@@ -869,78 +614,35 @@ static void _run_p1_phase(uint32_t next_master_round_start_ticks)
     }
 }
 
-static void _run_round_original(uint32_t *next_master_round_start_ticks)
+static void _run_round(uint32_t *next_master_round_start_ticks)
 {
     uint32_t p2_start_ticks;
 
     _prepare_local_data();
-    prepare_round(&g_proto, &g_store, &g_proto_cfg, g_local_desired_class, USE_PRE_P2);
+    prepare_round(&g_proto, &g_store, &g_proto_cfg, USE_PRE_P2);
     g_round_count++;
 
     _run_p1_phase(*next_master_round_start_ticks);
 
-    p2_start_ticks = g_proto.p1.next_phase_start_local_ticks;
+    p2_start_ticks = g_proto.p1.p2_phase_start_local_ticks;
+
+    if (g_proto.round_run_pre && g_proto.have_schedule) {
+        _apply_round_schedule();
+    }
+
     g_round_p2_start_ticks = p2_start_ticks;
-    _load_local_desired_data_for_p2();
 
-    p2_start_original(&g_proto, p2_start_ticks, &g_proto_cfg);
-    while (g_proto.p2.active) {
-        _run_p2_subslot();
-    }
-
-    if (_is_master()) {
-        *next_master_round_start_ticks += _original_round_period_ticks();
-    }
-}
-
-static uint32_t _run_pre_p2_commit(uint32_t start_ticks)
-{
-
-    pre_commit_start(&g_proto, start_ticks, &g_proto_cfg, _is_master());
-
-    while (g_proto.pre_commit.active) {
-        _run_pre_commit_slot();
-    }
-
-    return pre_commit_p2_start_ticks(&g_proto, &g_proto_cfg);
-}
-
-static void _run_round_pre_p2(uint32_t *next_master_round_start_ticks)
-{
-    uint32_t next_p1_phase_start_ticks;
-    uint32_t p2_start_ticks;
-
-    _prepare_local_data();
-    prepare_round(&g_proto, &g_store, &g_proto_cfg, g_local_desired_class, USE_PRE_P2);
-    g_round_count++;
-
-    _run_p1_phase(*next_master_round_start_ticks);
-
-    g_proto.round_tx_update_req = g_proto.update_pending_latched && !g_proto.round_run_pre;
-    if (g_proto.round_tx_update_req && _is_master()) {
-        g_proto.master_run_pre_next_round = true;
-    }
-
-    next_p1_phase_start_ticks = g_proto.p1.next_phase_start_local_ticks;
-    p2_start_ticks = next_p1_phase_start_ticks;
-    if (g_proto.round_run_pre) {
-
-        p2_start_ticks = _run_pre_p2_commit(next_p1_phase_start_ticks);
-
-        if (g_proto.have_schedule) {
-            unpack_class_schedule(&g_proto,
-                                  g_proto_cfg.p2_node_count);
-            _commit_round_schedule();
+    if(USE_PRE_P2) {
+        _load_local_scheduled_data_for_p2();
+        p2_start_pre_p2(&g_proto, p2_start_ticks, &g_proto_cfg);
+        if (!g_proto.p2.active) {
+            _wait_until_round_end();
         }
+    } else {
+        _load_local_desired_data_for_p2();
+        p2_start_original(&g_proto, p2_start_ticks, &g_proto_cfg);
     }
 
-    g_round_p2_start_ticks = p2_start_ticks;
-    _load_local_scheduled_data_for_p2();
-
-    p2_start_pre_p2(&g_proto, p2_start_ticks, &g_proto_cfg);
-    if (!g_proto.p2.active) {
-        _wait_until_round_end();
-    }
     while (g_proto.p2.active) {
         _run_p2_subslot();
     }
@@ -978,25 +680,13 @@ int main(void)
                                     NRF_SF_RADIO_US_TO_TIMER_TICKS(MASTER_START_DELAY_US);
 
     while (g_round_count < ROUND_TIME) {
-        if (USE_PRE_P2) {
-            _run_round_pre_p2(&next_master_round_start_ticks);
-        }
-        else {
-            _run_round_original(&next_master_round_start_ticks);
-        }
+            _run_round(&next_master_round_start_ticks);
 
         if (g_store.present_count > 1U) {
             g_p2_success.total_present += g_store.present_count;
             g_p2_success.sample_rounds++;
         }
-        if ((g_round_count % 1U) == 0U) {
-            if (USE_PRE_P2) {
-                _log_round_summary_pre_p2();
-            }
-            else {
-                _log_round_summary_original();
-            }
-        }
+        _log_round_summary();
     }
 
     return 0;

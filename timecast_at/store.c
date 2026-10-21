@@ -18,7 +18,7 @@ void store_init(timecast_store_t *store)
 }
 
 bool store_import(timecast_store_t *store, uint8_t node_id,
-                  const void *data, uint8_t flag, uint8_t desired_class, uint8_t len)
+                  const void *data, uint8_t desired_class, uint8_t len)
 {
     timecast_store_entry_t *entry = &store->entries[node_id];
 
@@ -30,7 +30,6 @@ bool store_import(timecast_store_t *store, uint8_t node_id,
     if (len != 0U) {
         memcpy(entry->data, data, len);
     }
-    entry->flag = flag;
     entry->desired_class = desired_class;
     entry->len = len;
     entry->present = true;

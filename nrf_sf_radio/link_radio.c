@@ -25,27 +25,26 @@
 #define NRF_SF_RADIO_ADV_ADDR_LO (0xABABABUL)
 #define NRF_SF_RADIO_ADV_ADDR_HI (0xABABC0UL)
 
-static void _encode_packet_header(uint8_t *dst, const uint8_t *payload,
-                                  uint8_t length);
 
 static void _encode_packet_header(uint8_t *dst, const uint8_t *payload,
                                   uint8_t length)
 {
     dst[0] = 0x42;
     dst[1] = (uint8_t)(NRF_SF_RADIO_ADV_ADDR_LEN + length);
-    dst[2] = (uint8_t)(NRF_SF_RADIO_ADV_ADDR_LO & 0xFFu);
-    dst[3] = (uint8_t)((NRF_SF_RADIO_ADV_ADDR_LO >> 8) & 0xFFu);
-    dst[4] = (uint8_t)((NRF_SF_RADIO_ADV_ADDR_LO >> 16) & 0xFFu);
-    dst[5] = (uint8_t)(NRF_SF_RADIO_ADV_ADDR_HI & 0xFFu);
-    dst[6] = (uint8_t)((NRF_SF_RADIO_ADV_ADDR_HI >> 8) & 0xFFu);
-    dst[7] = (uint8_t)((NRF_SF_RADIO_ADV_ADDR_HI >> 16) & 0xFFu);
-    memcpy(&dst[8], payload, length);
+    dst[2] = 0;
+    dst[3] = (uint8_t)(NRF_SF_RADIO_ADV_ADDR_LO & 0xFFu);
+    dst[4] = (uint8_t)((NRF_SF_RADIO_ADV_ADDR_LO >> 8) & 0xFFu);
+    dst[5] = (uint8_t)((NRF_SF_RADIO_ADV_ADDR_LO >> 16) & 0xFFu);
+    dst[6] = (uint8_t)(NRF_SF_RADIO_ADV_ADDR_HI & 0xFFu);
+    dst[7] = (uint8_t)((NRF_SF_RADIO_ADV_ADDR_HI >> 8) & 0xFFu);
+    dst[8] = (uint8_t)((NRF_SF_RADIO_ADV_ADDR_HI >> 16) & 0xFFu);
+    memcpy(&dst[9], payload, length);
 }
 
 bool nrf_sf_radio_tx_start(uint8_t *frame_buf, uint32_t txen_ticks,
                            uint32_t event_end_ticks, uint8_t frame_length)
 {
-    uint8_t dst[NRF_SF_RADIO_HDR_LEN + frame_length];
+    uint8_t dst[NRF_SF_RADIO_HDR_LEN + NRF_SF_RADIO_S1_LEN + frame_length];
 
     _encode_packet_header(dst, frame_buf, frame_length);
     nrf_sf_radio_tx_arm(dst, txen_ticks);
@@ -82,7 +81,7 @@ uint8_t nrf_sf_radio_rx_start(uint8_t **rx_buffer, uint32_t rxen_ticks,
                                     rx_end_ticks +
                                         NRF_SF_RADIO_TX_CHAIN_DELAY_TICKS);
         if ((NRF_RADIO->EVENTS_END != 0) && (NRF_RADIO->CRCSTATUS != 0)) {
-            *rx_buffer = &rx_pointer[NRF_SF_RADIO_HDR_LEN];
+            *rx_buffer = &rx_pointer[NRF_SF_RADIO_HDR_LEN + NRF_SF_RADIO_S1_LEN];
             return 0;
         }
         else if (NRF_RADIO->EVENTS_END == 0) {
@@ -112,7 +111,7 @@ uint32_t nrf_sf_radio_rx_listen_until_packet(uint8_t **rx_buffer,
         rx_ticks = nrf_sf_radio_get_last_address_time_ticks();
         nrf_sf_radio_wait_until(&NRF_RADIO->EVENTS_END, rx_end_ticks);
         if ((NRF_RADIO->EVENTS_END != 0) && (NRF_RADIO->CRCSTATUS == 1)) {
-            *rx_buffer = &rx_pointer[NRF_SF_RADIO_HDR_LEN];
+            *rx_buffer = &rx_pointer[NRF_SF_RADIO_HDR_LEN + NRF_SF_RADIO_S1_LEN];
             return rx_ticks -
                    NRF_SF_RADIO_TX_CHAIN_DELAY_TICKS;
         }

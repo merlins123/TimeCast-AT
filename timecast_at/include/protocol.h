@@ -33,21 +33,10 @@ typedef struct {
     uint8_t slot_idx;
     uint8_t ntx_done;
     uint8_t local_hop;
+    uint8_t schedule_ver;
     uint32_t tref_local_ticks;
-    uint32_t next_phase_start_local_ticks;
+    uint32_t p2_phase_start_local_ticks;
 } timecast_protocol_p1_t;
-
-typedef struct {
-    bool active;
-    bool flag_tx;
-    uint8_t slot_idx;
-    uint8_t ntx_done;
-    uint32_t start_local_ticks;
-    uint32_t slot_ticks;
-    uint32_t rx_valid;
-    uint8_t packed_len;
-    uint8_t packed_schedule[PACKET_PRE_COMMIT_MAX_FRAME_LEN];
-} pre_commit_state_t;
 
 typedef struct {
     bool active;
@@ -69,11 +58,9 @@ typedef struct {
     uint32_t current_epoch;
     uint32_t rx_valid;
     timecast_protocol_p1_t p1;
-    pre_commit_state_t pre_commit;
     timecast_protocol_p2_t p2;
+    uint8_t local_schedule_ver;
     uint8_t scheduled_class[TIMECAST_STORE_MAX_NODES];
-    bool update_pending_latched;
-    bool round_tx_update_req;
     bool round_run_pre;
     bool master_run_pre_next_round;
     bool master_force_initial_pre;
@@ -86,6 +73,7 @@ typedef struct {
     uint8_t p2_ntx;
     uint8_t p2_node_count;
     uint32_t glossy_slot_ticks;
+    uint32_t packed_schedule_ticks;
     uint32_t p1_rx_ts_to_slot_start_ticks;
     uint32_t p1_guard_ticks;
     uint32_t p2_subslot_ticks;
@@ -107,16 +95,12 @@ void p1_prepare_tx(timecast_protocol_state_t *state,
                    p1_sync_frame_t *frame);
 void p1_handle_rx(timecast_protocol_state_t *state,
                   const p1_sync_frame_t *frame,
+                  const uint8_t *frame_buf,
                   uint32_t rx_local_ticks,
                   const timecast_protocol_cfg_t *cfg);
-bool p1_finish_slot(timecast_protocol_state_t *state,
+void p1_finish_slot(timecast_protocol_state_t *state,
                     const timecast_protocol_cfg_t *cfg,
                     bool did_tx);
-void pre_commit_start(timecast_protocol_state_t *state,
-                      uint32_t start_local_ticks,
-                      const timecast_protocol_cfg_t *cfg, bool master);
-void pre_commit_prepare_tx(timecast_protocol_state_t *state, pre_commit_frame_t *frame);
-uint32_t pre_commit_slot_ticks(const timecast_protocol_cfg_t *cfg);
 void p2_start_original(timecast_protocol_state_t *state,
                        uint32_t start_local_ticks,
                        const timecast_protocol_cfg_t *cfg);
@@ -128,7 +112,6 @@ uint32_t p2_get_slot_ticks(const timecast_protocol_state_t *state,
                            const timecast_protocol_cfg_t *cfg);
 bool p2_prepare_tx(const timecast_protocol_state_t *state,
                    const timecast_store_t *store,
-                   const timecast_protocol_cfg_t *cfg,
                    p2_data_frame_t *frame,
                    const uint8_t **data_ptr);
 bool p2_handle_rx(timecast_protocol_state_t *state,
@@ -138,18 +121,13 @@ bool p2_handle_rx(timecast_protocol_state_t *state,
 void p2_finish_subslot(timecast_protocol_state_t *state,
                        const timecast_protocol_cfg_t *cfg);
 void prepare_round(timecast_protocol_state_t *state, timecast_store_t *store,
-                   const timecast_protocol_cfg_t *cfg, uint8_t desired_class, bool use_pre_p2);
-void unpack_class_schedule(timecast_protocol_state_t *state, uint8_t node_count);
+                   const timecast_protocol_cfg_t *cfg, bool use_pre_p2);
 uint8_t frame_len_to_class(uint8_t payload_len);
 uint8_t class_to_frame_len(uint8_t class_id);
 void master_track_p2_completeness(timecast_protocol_state_t *state,
                                   const timecast_protocol_cfg_t *cfg,
                                   uint16_t present_count, bool use_pre_p2,
                                   uint32_t incomplete_threshold);
-uint32_t pre_commit_slot_start_ticks(timecast_protocol_state_t *state);
-uint32_t pre_commit_p2_start_ticks(timecast_protocol_state_t *state,
-                                   const timecast_protocol_cfg_t *cfg);
-void pre_commit_finish_slot(timecast_protocol_state_t *state, bool did_tx, uint8_t ntx);
 #ifdef __cplusplus
 }
 #endif
