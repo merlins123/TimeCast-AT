@@ -33,7 +33,6 @@ typedef struct {
     timecast_store_entry_t entries[TIMECAST_STORE_MAX_NODES];
 } timecast_store_t;
 
-void store_init(timecast_store_t *store);
 bool store_import(timecast_store_t *store, uint8_t node_id,
                   const void *data, uint8_t desired_class, uint8_t len);
 bool store_has_data(const timecast_store_t *store, uint8_t node_id);

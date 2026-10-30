@@ -31,7 +31,7 @@ size_t encode_p1_sync(uint8_t *dst,
     dst[0] = frame->packet_type;
     dst[1] = (uint8_t)(frame->relay_cnt & PACKET_P1_RELAY_CNT_MASK);
     if ((frame->flags & 1U) != 0U) {
-        dst[1] |= PACKET_P1_RUN_PRE_WIRE_BIT;
+        dst[1] |= PACKET_P1_WITH_TABLE_WIRE_BIT;
     }
     dst[2] = frame->schedule_ver;
     _u32_to_le(&dst[3], frame->epoch);
@@ -64,7 +64,7 @@ bool decode_p1_sync(const uint8_t *frame_buf,
     }
 
     frame->relay_cnt = (uint8_t)(frame_buf[1] & PACKET_P1_RELAY_CNT_MASK);
-    frame->flags = ((frame_buf[1] & PACKET_P1_RUN_PRE_WIRE_BIT) != 0U) ?
+    frame->flags = ((frame_buf[1] & PACKET_P1_WITH_TABLE_WIRE_BIT) != 0U) ?
                    1U : 0U;
     frame->schedule_ver = frame_buf[2];
     frame->epoch = _u32_from_le(&frame_buf[3]);
@@ -73,23 +73,20 @@ bool decode_p1_sync(const uint8_t *frame_buf,
 
 void encode_p2_data(uint8_t *dst,
                     const p2_data_frame_t *frame,
-                    const uint8_t *data)
+                    const uint8_t *data,
+                    uint8_t data_len)
 {
     dst[0] = frame->packet_type;
     dst[1] = frame->source_node_id;
     dst[2] = frame->slot_idx;
-    dst[3] = frame->subslot_idx;
-    dst[4] = frame->desired_class;
-    dst[5] = frame->data_len;
-    _u32_to_le(&dst[6], frame->epoch);
-    if (frame->data_len > 0U) {
-        memcpy(&dst[PACKET_P2_DATA_FRAME_HDR_LEN], data, frame->data_len);
+    dst[3] = frame->desired_class;
+    if (data_len > 0U) {
+        memcpy(&dst[PACKET_P2_DATA_FRAME_HDR_LEN], data, data_len);
     }
 }
 
 bool decode_p2_data(const uint8_t *frame_buf,
-                    p2_data_frame_t *frame,
-                    uint8_t *data_out)
+                    p2_data_frame_t *frame)
 {
     frame->packet_type = frame_buf[0];
     if (frame->packet_type != PACKET_TYPE_P2_DATA) {
@@ -97,18 +94,9 @@ bool decode_p2_data(const uint8_t *frame_buf,
     }
     frame->source_node_id = frame_buf[1];
     frame->slot_idx = frame_buf[2];
-    frame->subslot_idx = frame_buf[3];
-    frame->desired_class = frame_buf[4];
+    frame->desired_class = frame_buf[3];
     if(frame->desired_class > 15U) {
         return false;
-    }
-    frame->data_len = frame_buf[5];
-    if (frame->data_len > PACKET_P2_DATA_MAX_DATA_LEN) {
-        return false;
-    }
-    frame->epoch = _u32_from_le(&frame_buf[6]);
-    if (data_out && (frame->data_len > 0U)) {
-        memcpy(data_out, &frame_buf[PACKET_P2_DATA_FRAME_HDR_LEN], frame->data_len);
     }
     return true;
 }

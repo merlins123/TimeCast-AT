@@ -1,165 +1,203 @@
-# TimeCast-AT
+# TimeCast-AT Code Reference
 
-TimeCast-AT is a RIOT application for synchronous flooding experiments. It
-uses the external [`nrf_sf_radio`](../nrf_sf_radio/README.md) module for scheduled
-radio transmission, reception, and hardware timestamps on nRF52 devices.
+## [main.c](main.c)
 
-The application implements round synchronization, data dissemination, and
-adaptive scheduling based on each node's payload size. The current
-experiment generates synthetic payloads filled with the character `c`.
+### File Purpose
 
-## Protocol operation
+### Functions
 
-Node `0` is the master and initiates each round. Other nodes receive and relay
-the P1 synchronization packet to establish a local time reference. Logical node
-IDs must be unique and contiguous, from `0` to `TIMECAST_P2_NODE_COUNT - 1`.
-The configured node count includes the master.
+#### `_round_period_ticks()` (`static`)
 
-Two modes are selected at build time:
+#### `_is_master()` (`static`)
 
-| Mode | Setting | Round sequence |
-|------|---------|----------------|
-| Fixed schedule | `TIMECAST_USE_PRE_P2=0` | P1 synchronization, P2 data, round gap |
-| Adaptive schedule (default) | `TIMECAST_USE_PRE_P2=1` | P1 synchronization with an optional schedule table, P2 data, round gap |
+#### `_format_class_map()` (`static`)
 
-P2 assigns one subslot to each source node within a slot. Nodes alternate
-transmit and receive slots, forwarding data already available in their local
-store. P2 runs for `2 * TIMECAST_P2_NTX` slots. The store is cleared each round
-and retains the first data entry accepted for each source, including local data.
+#### `_local_data_len_for_source()` (`static`)
 
-In adaptive mode, payload sizes are represented by 16 classes. Each P2 packet
-carries its source's desired class and schedule-update bit, which relays
-preserve with the data. The master records received update requests and appends
-a packed class table to the next round's P1 packet. Nodes derive their P2
-subslot durations from the received classes. A P1 flag indicates whether the
-table is present; carrying the table also extends each P1 slot by its airtime.
+#### `_build_local_data_with_len()` (`static`)
 
-The initial class table is derived from `TIMECAST_MAX_DATA_LEN`; the master
-also sets its own entry to its desired class before the first P1. The
-master distributes the table in P1 on the first adaptive round, when its own
-class changes, after it observes an update request, or after the configured
-number of consecutive incomplete P2 rounds.
-The master retains the previous class for a source without a received update.
+#### `_apply_round_schedule()` (`static`)
 
-Every P1 packet carries a schedule version. The master increments it whenever
-it distributes a table, including recovery retransmissions. Followers start
-without a valid schedule and must receive a table in P1 before entering P2.
-On rounds without a table, a follower enters P2 only if its cached schedule is
-valid and its version matches P1. A follower missing an update still relays P1
-with the received version, skips P2, and resumes P2 after receiving a table.
+#### `_local_data_init()` (`static`)
 
-## Source layout
+#### `_load_local_desired_data_for_p2()` (`static`)
 
-| File | Responsibility |
-|------|----------------|
-| [main.c](main.c) | Radio calls, phase execution, experiment data, and logging |
-| [protocol.c](protocol.c) | Protocol state, slot scheduling, and adaptive schedule management |
-| [packet.c](packet.c) | Packet serialization and deserialization |
-| [store.c](store.c) | Per-source data storage and duplicate suppression |
-| [include/](include/) | Packet formats, state structures, and interfaces |
-| [Makefile](Makefile) | RIOT integration and build-time configuration |
+#### `_load_local_scheduled_data_for_p2()` (`static`)
 
-## Build and run
+#### `_elapsed_since_ticks()` (`static`)
 
-Install the RIOT build dependencies and ARM toolchain, and place the RIOT
-checkout alongside this repository:
+#### `_log_p2_success_rate()` (`static`)
 
-```text
-workspace/
-├── RIOT/
-└── modules/
-    ├── nrf_sf_radio/
-    └── timecast_at/
-```
+#### `_log_round_summary()` (`static`)
 
-The following commands run from the repository root (`modules/`). Build a
-master for a four-node experiment:
+#### `_handle_p1_rx()` (`static`)
 
-```sh
-make -C timecast_at BOARD=nrf52840dk LOCAL_NODE_ID=0 \
-    TIMECAST_P2_NODE_COUNT=4 -j4
-```
+#### `_handle_p2_rx()` (`static`)
 
-To select fixed scheduling instead:
+#### `_scan_until_reference()` (`static`)
 
-```sh
-make -C timecast_at BOARD=nrf52840dk LOCAL_NODE_ID=0 \
-    TIMECAST_P2_NODE_COUNT=4 TIMECAST_USE_PRE_P2=0 -j4
-```
+#### `_run_p1_slot()` (`static`)
 
-The firmware is generated at `bin/nrf52840dk/timecast_at.elf` inside this
-application directory. Repeat the build for IDs `1`, `2`, and `3` for the
-followers. Each build uses the same output path, so flash or copy each node's
-firmware before building the next one.
+#### `_run_p2_subslot()` (`static`)
 
-For a locally connected board, the corresponding adaptive master can be built
-and flashed with RIOT's board-specific flashing tools:
+#### `_wait_until_round_end()` (`static`)
 
-```sh
-make -C timecast_at BOARD=nrf52840dk LOCAL_NODE_ID=0 \
-    TIMECAST_P2_NODE_COUNT=4 TIMECAST_USE_PRE_P2=1 all flash
-make -C timecast_at BOARD=nrf52840dk term
-```
+#### `_prepare_local_data()` (`static`)
 
-Use the same mode, node count, and compatible radio and timing settings across
-all nodes. Flash followers with their respective IDs and start them before
-starting or resetting the master. Followers wait for a P1 reference before
-progressing through a round.
+#### `_run_p1_phase()` (`static`)
 
-The application Makefile registers the sibling driver through
-`EXTERNAL_MODULE_DIRS`. If the RIOT checkout is elsewhere, pass
-`RIOTBASE=/absolute/path/to/RIOT` to `make`. 
+#### `_run_round()` (`static`)
 
-## Configuration
+#### `main()`
 
-The main Makefile variables are listed below. They can be overridden on the
-`make` command line.
+## [protocol.c](protocol.c)
 
-| Variable | Default | Meaning |
-|----------|---------|---------|
-| `LOCAL_NODE_ID` | `0` | Logical node ID; `0` selects the master |
-| `TIMECAST_P2_NODE_COUNT` | `4` | Total participating nodes, including the master |
-| `TIMECAST_STORE_MAX_NODES` | Node count | Number of per-source store entries |
-| `TIMECAST_USE_PRE_P2` | `1` | Adaptive scheduling; select fixed scheduling with `0` |
-| `TIMECAST_NTX` | `5` | P1 repetition parameter; the phase has `2 * NTX` slots |
-| `TIMECAST_P2_NTX` | `10` | P2 repetition parameter; phase length is `2 * P2_NTX` slots |
-| `TIMECAST_APP_DATA_LEN` | `75` | Desired application data length in bytes |
-| `TIMECAST_MAX_DATA_LEN` | `75` | Application data length used to initialize the adaptive class table |
-| `TIMECAST_ROUND_TIME` | `1050` | Local round-loop limit |
-| `TIMECAST_FAST_RAMPUP` | `1` | Select 40 us radio ramp-up; `0` selects 140 us |
-| `TIMECAST_MASTER_P2_INCOMPLETE_PRE_THRESHOLD` | `10` | Consecutive incomplete master rounds before requesting an update; `0` disables this trigger |
+### File Purpose
 
+### Functions
 
-Keep the store capacity at least as large as the node count. The current
-store supports up to 110 application data bytes per source. Set
-`TIMECAST_MAX_DATA_LEN` consistently across nodes, within this capacity and at
-least as large as every node's initial payload. In fixed mode, the configured
-P2 subslot must accommodate every node's payload. In adaptive mode, a larger
-desired payload waits for a suitable schedule received in P1. The application
-retains cached data that fits the scheduled capacity; otherwise, it limits
-the transmitted cached data to the fitting prefix.
+#### `_tx_first()` (`static`)
 
-The [Makefile](Makefile) also exposes processing margins, phase guards,
-receive windows, and slot durations. Defaults derive airtime at BLE 1 Mbit/s
-and convert microseconds to the driver's 16 MHz timer ticks. Repetition
-parameters describe the schedule, not measured successful transmission counts.
+#### `_p2_build_schedule()` (`static`)
 
-The application currently selects BLE channel `24` and TX power `+4 dBm` in
-`main.c` after driver initialization. These override the driver's channel and
-power defaults and are not application Makefile options. See the
-[driver configuration](../nrf_sf_radio/README.md#configuration) for its access
-address and other radio settings.
+#### `_class_span_bytes()` (`static`)
 
-## Hardware requirements
+#### `protocol_init()`
 
-The current radio backend targets nRF52 devices. It directly uses RADIO,
-TIMER2, TIMER3, and PPI channels 9 through 15. Other enabled components must
-not configure these resources concurrently. See the
-[driver resource allocation](../nrf_sf_radio/README.md#hardware-resource-usage).
-Compilation verifies source integration; synchronization accuracy and
-data dissemination performance require measurements on the target boards.
+#### `p1_start()`
 
-## License
+#### `p1_get_slot_ticks()`
 
-The application's source files are licensed under `LGPL-2.1-only`.
-See [LICENSE](../LICENSE) for the full license text.
+#### `p1_get_slot_start_local_ticks()`
+
+#### `p1_prepare_tx()`
+
+#### `p1_handle_rx()`
+
+#### `p1_finish_slot()`
+
+#### `_p2_start_common()` (`static`)
+
+#### `p2_start_original()`
+
+#### `p2_start_at()`
+
+#### `p2_get_subslot_start_local_ticks()`
+
+#### `p2_get_slot_ticks()`
+
+#### `p2_prepare_tx()`
+
+#### `p2_handle_rx()`
+
+#### `p2_finish_subslot()`
+
+#### `prepare_round()`
+
+#### `frame_len_to_class()`
+
+#### `class_to_frame_len()`
+
+#### `master_track_p2_completeness()`
+
+## [include/protocol.h](include/protocol.h)
+
+### File Purpose
+
+### Function Declarations
+
+#### `protocol_init()`
+
+#### `p1_start()`
+
+#### `p1_get_slot_ticks()`
+
+#### `p1_get_slot_start_local_ticks()`
+
+#### `p1_prepare_tx()`
+
+#### `p1_handle_rx()`
+
+#### `p1_finish_slot()`
+
+#### `p2_start_original()`
+
+#### `p2_start_at()`
+
+#### `p2_get_subslot_start_local_ticks()`
+
+#### `p2_get_slot_ticks()`
+
+#### `p2_prepare_tx()`
+
+#### `p2_handle_rx()`
+
+#### `p2_finish_subslot()`
+
+#### `prepare_round()`
+
+#### `frame_len_to_class()`
+
+#### `class_to_frame_len()`
+
+#### `master_track_p2_completeness()`
+
+## [packet.c](packet.c)
+
+### File Purpose
+
+### Functions
+
+#### `_u32_to_le()` (`static`)
+
+#### `_u32_from_le()` (`static`)
+
+#### `encode_p1_sync()`
+
+#### `decode_p1_sync()`
+
+#### `encode_p2_data()`
+
+#### `decode_p2_data()`
+
+## [include/packet.h](include/packet.h)
+
+### File Purpose
+
+### Function Declarations
+
+#### `encode_p1_sync()`
+
+#### `decode_p1_sync()`
+
+#### `encode_p2_data()`
+
+#### `decode_p2_data()`
+
+## [store.c](store.c)
+
+### File Purpose
+
+### Functions
+
+#### `store_import()`
+
+#### `store_has_data()`
+
+#### `store_present_count()`
+
+## [include/store.h](include/store.h)
+
+### File Purpose
+
+### Function Declarations
+
+#### `store_import()`
+
+#### `store_has_data()`
+
+#### `store_present_count()`
+
+## [Makefile](Makefile)
+
+### File Purpose

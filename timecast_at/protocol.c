@@ -12,48 +12,20 @@ static bool _tx_first(const timecast_protocol_state_t *state)
     return state && ((state->p1.local_hop & 0x1U) == 0U);
 }
 
-static void _set_p2_phase_start(timecast_protocol_state_t *state,
-                                  const timecast_protocol_cfg_t *cfg,
-                                  uint32_t tref_local_ticks)
-{   if(state->round_run_pre) {
-        state->p1.p2_phase_start_local_ticks = tref_local_ticks +
-                                             ((uint32_t)cfg->ntx * 2U) * (cfg->glossy_slot_ticks + cfg->packed_schedule_ticks) +
-                                             cfg->p1_guard_ticks;
-    } else {
-        state->p1.p2_phase_start_local_ticks = tref_local_ticks +
-                                             ((uint32_t)cfg->ntx * 2U) * cfg->glossy_slot_ticks +
-                                             cfg->p1_guard_ticks;
-    }
-}
-
-static void _p2_build_fixed_schedule(timecast_protocol_state_t *state,
-                                     const timecast_protocol_cfg_t *cfg)
+static void _p2_build_schedule(timecast_protocol_state_t *state,
+                                     const timecast_protocol_cfg_t *cfg, bool adaptive)
 {
     uint8_t source_id;
     uint32_t slot_ticks = 0U;
+    uint32_t subslot_ticks = cfg->p2_subslot_ticks;
 
-    for (source_id = 0U; source_id < state->p2.node_count; source_id++) {
-        state->p2.subslot_offset_ticks[source_id] = slot_ticks;
-        state->p2.subslot_ticks[source_id] = cfg->p2_subslot_ticks;
-        slot_ticks += cfg->p2_subslot_ticks + cfg->p2_guard_ticks;
-    }
-
-    state->p2.slot_ticks = slot_ticks;
-}
-
-static void _p2_build_adaptive_schedule(timecast_protocol_state_t *state,
-                                        const timecast_protocol_cfg_t *cfg)
-{
-    uint8_t source_id;
-    uint32_t slot_ticks = 0U;
-
-    for (source_id = 0U; source_id < state->p2.node_count; source_id++) {
-        uint8_t p2_frame_len = class_to_frame_len(state->scheduled_class[source_id]);
-        uint32_t subslot_ticks;
-
-        subslot_ticks = cfg->p2_payload_base_ticks +
-                        ((uint32_t)p2_frame_len * cfg->p2_payload_byte_ticks);
-
+    for (source_id = 0U; source_id < cfg->p2_node_count; source_id++) {
+        if (adaptive) {
+            subslot_ticks =
+                cfg->p2_payload_base_ticks +
+                (uint32_t)class_to_frame_len(state->scheduled_class[source_id]) *
+                cfg->p2_payload_byte_ticks;
+        }
         state->p2.subslot_offset_ticks[source_id] = slot_ticks;
         state->p2.subslot_ticks[source_id] = subslot_ticks;
         slot_ticks += subslot_ticks + cfg->p2_guard_ticks;
@@ -61,6 +33,7 @@ static void _p2_build_adaptive_schedule(timecast_protocol_state_t *state,
 
     state->p2.slot_ticks = slot_ticks;
 }
+
 
 static uint8_t _class_span_bytes(void)
 {
@@ -73,18 +46,12 @@ void protocol_init(timecast_protocol_state_t *state, bool initiator)
     if (!state) {
         return;
     }
-
     memset(state, 0, sizeof(*state));
-    state->p1.active = true;
-    state->p1.flag_tx = initiator;
-    state->p1.local_hop = initiator ? 0U : UINT8_MAX;
-    state->joined = initiator;
-    state->master_force_initial_pre = true;
+    state->master_with_table_next_round = initiator;
 }
 
 void p1_start(timecast_protocol_state_t *state,
               uint32_t start_local_ticks,
-              const timecast_protocol_cfg_t *cfg,
               bool initiator,
               uint32_t epoch)
 {
@@ -94,7 +61,6 @@ void p1_start(timecast_protocol_state_t *state,
 
     memset(&state->p1, 0, sizeof(state->p1));
 
-    state->joined = initiator;
     state->current_epoch = epoch;
     state->rx_valid = 0U;
     state->p1.active = true;
@@ -104,8 +70,15 @@ void p1_start(timecast_protocol_state_t *state,
         state->p1.has_tref = true;
         state->p1.tref_local_ticks = start_local_ticks;
         state->p1.schedule_ver = state->local_schedule_ver;
-        _set_p2_phase_start(state, cfg, start_local_ticks);
     }
+}
+
+uint32_t p1_get_slot_ticks(
+    const timecast_protocol_state_t *state,
+    const timecast_protocol_cfg_t *cfg)
+{
+    return cfg->glossy_slot_ticks +
+           (state->round_with_table ? cfg->packed_schedule_ticks : 0U);
 }
 
 uint32_t p1_get_slot_start_local_ticks(const timecast_protocol_state_t *state,
@@ -114,12 +87,8 @@ uint32_t p1_get_slot_start_local_ticks(const timecast_protocol_state_t *state,
     if (!state || !cfg || !state->p1.has_tref) {
         return 0U;
     }
-    if(state->round_run_pre) {
-        return state->p1.tref_local_ticks +
-           ((uint32_t)state->p1.slot_idx * (cfg->glossy_slot_ticks + cfg->packed_schedule_ticks));
-    }
     return state->p1.tref_local_ticks +
-           ((uint32_t)state->p1.slot_idx * cfg->glossy_slot_ticks);
+           ((uint32_t)state->p1.slot_idx * p1_get_slot_ticks(state, cfg));
 }
 
 void p1_prepare_tx(timecast_protocol_state_t *state,
@@ -129,7 +98,7 @@ void p1_prepare_tx(timecast_protocol_state_t *state,
     frame->relay_cnt = (uint8_t)state->p1.slot_idx;
     frame->schedule_ver = state->p1.schedule_ver;
     frame->epoch = state->current_epoch;
-    frame->flags = state->round_run_pre ? 1U : 0U;
+    frame->flags = state->round_with_table ? 1U : 0U;
     state->p1.ntx_done++;
 }
 
@@ -140,9 +109,6 @@ void p1_handle_rx(timecast_protocol_state_t *state,
                   const timecast_protocol_cfg_t *cfg)
 {
     uint32_t tref_local_ticks;
-    bool first_reference;
-
-    first_reference = !state->p1.has_tref;
     state->current_epoch = frame->epoch;
 
     if (!state->p1.has_tref || (frame->relay_cnt > state->p1.slot_idx)) {
@@ -150,13 +116,13 @@ void p1_handle_rx(timecast_protocol_state_t *state,
     }
 
     if((frame->flags & 1U) != 0U) {
-        state->round_run_pre = true;
+        state->round_with_table = true;
         state->have_schedule = true;
         state->local_schedule_ver = frame->schedule_ver;
         uint8_t source_id;
 
         for (source_id = 0U; source_id < cfg->p2_node_count; source_id++) {
-            uint8_t packed_byte = frame_buf[PACKET_P1_SYNC_FRAME_LEN + source_id / 2U];
+            uint8_t packed_byte = frame_buf[9U + PACKET_P1_SYNC_FRAME_LEN + source_id / 2U];
 
             if ((source_id & 0x1U) == 0U) {
                 state->scheduled_class[source_id] = (uint8_t)(packed_byte & 0x0FU);
@@ -170,18 +136,14 @@ void p1_handle_rx(timecast_protocol_state_t *state,
     }
 
     if (!state->p1.has_tref) {
-        uint32_t p1_slot_ticks = state->round_run_pre ? cfg->glossy_slot_ticks + cfg->packed_schedule_ticks : cfg->glossy_slot_ticks;
+        uint32_t p1_slot_ticks = p1_get_slot_ticks(state, cfg);
         tref_local_ticks = rx_local_ticks - cfg->p1_rx_ts_to_slot_start_ticks -
                            ((uint32_t)frame->relay_cnt * p1_slot_ticks);
         state->p1.has_tref = true;
         state->p1.local_hop = (uint8_t)(frame->relay_cnt + 1U);
         state->p1.tref_local_ticks = tref_local_ticks;
         state->p1.schedule_ver = frame->schedule_ver;
-        _set_p2_phase_start(state, cfg, tref_local_ticks);
-        state->joined = true;
-    }
 
-    if (first_reference) {
         state->p1.slot_idx = (uint8_t)(frame->relay_cnt + 1U);
         state->p1.flag_tx = (state->p1.ntx_done < cfg->ntx);
     }
@@ -210,14 +172,12 @@ void p1_finish_slot(timecast_protocol_state_t *state,
 }
 
 static bool _p2_start_common(timecast_protocol_state_t *state,
-                             uint32_t start_local_ticks,
-                             const timecast_protocol_cfg_t *cfg)
+                             uint32_t start_local_ticks)
 {
     memset(&state->p2, 0, sizeof(state->p2));
     state->p2.tx_slot = _tx_first(state);
-    state->p2.node_count = cfg->p2_node_count;
     state->p2.start_local_ticks = start_local_ticks;
-    state->p2.active = state->joined;
+    state->p2.active = state->p1.has_tref;
 
     return state->p2.active;
 }
@@ -226,27 +186,24 @@ void p2_start_original(timecast_protocol_state_t *state,
                        uint32_t start_local_ticks,
                        const timecast_protocol_cfg_t *cfg)
 {
-    if (!_p2_start_common(state, start_local_ticks, cfg)) {
+    if (!_p2_start_common(state, start_local_ticks)) {
         return;
     }
 
-    _p2_build_fixed_schedule(state, cfg);
+    _p2_build_schedule(state, cfg, false);
 }
 
-void p2_start_pre_p2(timecast_protocol_state_t *state,
+void p2_start_at(timecast_protocol_state_t *state,
                      uint32_t start_local_ticks,
                      const timecast_protocol_cfg_t *cfg)
 {
-    if (!_p2_start_common(state, start_local_ticks, cfg)) {
+    if (!_p2_start_common(state, start_local_ticks)) {
         return;
     }
+    _p2_build_schedule(state, cfg, true);
 
-    if(state->have_schedule) {
-        _p2_build_adaptive_schedule(state, cfg);
-        state->p2.active = true;
-    } else {
-        state->p2.active = false;
-    }
+    state->p2.active = state->have_schedule;
+
 }
 
 uint32_t p2_get_subslot_start_local_ticks(const timecast_protocol_state_t *state)
@@ -287,10 +244,7 @@ bool p2_prepare_tx(const timecast_protocol_state_t *state,
     frame->packet_type = PACKET_TYPE_P2_DATA;
     frame->source_node_id = owner_id;
     frame->slot_idx = state->p2.slot_idx;
-    frame->subslot_idx = state->p2.subslot_idx;
     frame->desired_class = entry->desired_class;
-    frame->data_len = entry->len;
-    frame->epoch = state->current_epoch;
     if (entry->len != 0) {
         *data_ptr = entry->data;
     }
@@ -300,25 +254,23 @@ bool p2_prepare_tx(const timecast_protocol_state_t *state,
 bool p2_handle_rx(timecast_protocol_state_t *state,
                   timecast_store_t *store,
                   const p2_data_frame_t *frame,
-                  const uint8_t *data)
+                  const uint8_t *data,
+                  uint8_t data_len)
 {
-    if (frame->epoch != state->current_epoch) {
-        return false;
-    }
     if (frame->slot_idx != state->p2.slot_idx) {
         return false;
     }
-    if (frame->subslot_idx != state->p2.subslot_idx) {
+    if (frame->source_node_id != state->p2.subslot_idx) {
         return false;
     }
 
     state->p2.rx_valid++;
-    if (store_import(store, frame->source_node_id, data, frame->desired_class , frame->data_len)) {
+    if (store_import(store, frame->source_node_id, data, frame->desired_class, data_len)) {
         state->p2.store_updates++;
     }
     if(LOCAL_NODE_ID == 0 && frame->desired_class != state->scheduled_class[frame->source_node_id]) {
         state->scheduled_class[frame->source_node_id] = frame->desired_class;
-        state->master_run_pre_next_round = true;
+        state->master_with_table_next_round = true;
     }
     return true;
 }
@@ -326,12 +278,8 @@ bool p2_handle_rx(timecast_protocol_state_t *state,
 void p2_finish_subslot(timecast_protocol_state_t *state,
                        const timecast_protocol_cfg_t *cfg)
 {
-    uint8_t node_count;
-
-    node_count = state->p2.node_count;
-
     state->p2.subslot_idx++;
-    if (state->p2.subslot_idx >= node_count) {
+    if (state->p2.subslot_idx >= cfg->p2_node_count) {
         state->p2.subslot_idx = 0U;
         state->p2.slot_idx++;
         state->p2.tx_slot = !state->p2.tx_slot;
@@ -342,27 +290,25 @@ void p2_finish_subslot(timecast_protocol_state_t *state,
 }
 
 void prepare_round(timecast_protocol_state_t *state, timecast_store_t *store,
-                   const timecast_protocol_cfg_t *cfg, bool use_pre_p2)
+                   const timecast_protocol_cfg_t *cfg, bool use_at)
 {
     memset(store->entries, 0, sizeof(store->entries));
     store->present_count = 0;
 
-    if (use_pre_p2) {
+    if (use_at) {
         if (cfg->local_node_id == 0U) {
-            state->round_run_pre = state->master_force_initial_pre ||
-                                   state->master_run_pre_next_round;
-            if(state->round_run_pre) {
+            state->round_with_table = state->master_with_table_next_round;
+            if(state->round_with_table) {
                 state->local_schedule_ver++;
             }
-            state->master_force_initial_pre = false;
-            state->master_run_pre_next_round = false;
+            state->master_with_table_next_round = false;
         }
         else {
-            state->round_run_pre = false;
+            state->round_with_table = false;
         }
     }
     else {
-        state->round_run_pre = false;
+        state->round_with_table = false;
     }
 }
 
@@ -392,7 +338,7 @@ uint8_t frame_len_to_class(uint8_t frame_len)
 
 uint8_t class_to_frame_len(uint8_t class_id)
 {
-    uint32_t payload_len;
+    uint32_t frame_len;
 
     if (class_id > CLASS_MAX_ID) {
         return 0U;
@@ -401,18 +347,18 @@ uint8_t class_to_frame_len(uint8_t class_id)
         return PACKET_P2_DATA_MAX_FRAME_LEN;
     }
 
-    payload_len = (uint32_t)PACKET_P2_DATA_FRAME_HDR_LEN +
+    frame_len = (uint32_t)PACKET_P2_DATA_FRAME_HDR_LEN +
                   ((uint32_t)(class_id + 1U) * (uint32_t)_class_span_bytes()) - 1U;
 
-    return (uint8_t)payload_len;
+    return (uint8_t)frame_len;
 }
 
 void master_track_p2_completeness(timecast_protocol_state_t *state,
                                   const timecast_protocol_cfg_t *cfg,
-                                  uint16_t present_count, bool use_pre_p2,
+                                  uint16_t present_count, bool use_at,
                                   uint32_t incomplete_threshold)
 {
-    if (!use_pre_p2 || (cfg->local_node_id != 0U) ||
+    if (!use_at || (cfg->local_node_id != 0U) ||
         (incomplete_threshold == 0U)) {
         return;
     }
@@ -425,7 +371,7 @@ void master_track_p2_completeness(timecast_protocol_state_t *state,
 
     state->master_p2_incomplete_rounds++;
     if (state->master_p2_incomplete_rounds >= incomplete_threshold) {
-        state->master_run_pre_next_round = true;
+        state->master_with_table_next_round = true;
         state->master_p2_incomplete_rounds = 0U;
     }
 }

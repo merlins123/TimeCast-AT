@@ -20,7 +20,7 @@ extern "C" {
 #define PACKET_TYPE_P2_DATA (0x04U)
 
 #define PACKET_P1_RELAY_CNT_MASK    (0x7FU)
-#define PACKET_P1_RUN_PRE_WIRE_BIT  (0x80U)
+#define PACKET_P1_WITH_TABLE_WIRE_BIT  (0x80U)
 
 typedef struct __attribute__((packed)) {
     uint8_t packet_type;
@@ -34,10 +34,7 @@ typedef struct __attribute__((packed)) {
     uint8_t packet_type;
     uint8_t source_node_id;
     uint8_t slot_idx;
-    uint8_t subslot_idx;
     uint8_t desired_class;
-    uint8_t data_len;
-    uint32_t epoch;
 } p2_data_frame_t;
 
 enum {
@@ -58,10 +55,10 @@ bool decode_p1_sync(const uint8_t *frame_buf,
                     p1_sync_frame_t *frame);
 void encode_p2_data(uint8_t *dst,
                     const p2_data_frame_t *frame,
-                    const uint8_t *data);
+                    const uint8_t *data,
+                    uint8_t data_len);
 bool decode_p2_data(const uint8_t *frame_buf,
-                    p2_data_frame_t *frame,
-                    uint8_t *data_out);
+                    p2_data_frame_t *frame);
 
 #ifdef __cplusplus
 }

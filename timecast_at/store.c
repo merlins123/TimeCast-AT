@@ -7,15 +7,6 @@
 
 #include "store.h"
 
-void store_init(timecast_store_t *store)
-{
-    if (!store) {
-        return;
-    }
-
-    memset(store->entries, 0, sizeof(store->entries));
-    store->present_count = 0;
-}
 
 bool store_import(timecast_store_t *store, uint8_t node_id,
                   const void *data, uint8_t desired_class, uint8_t len)

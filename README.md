@@ -1,35 +1,79 @@
-# TimeCast-AT
+# Getting Started
 
-This repository contains two components for synchronous flooding experiments
-with RIOT OS: the `nrf_sf_radio` low-level radio driver and the TimeCast-AT
-protocol built on top of it.
+## 1. Prerequisites
+This guide uses a Linux host and two nRF52-based development boards connected to the host via USB.
+After flashing the firmware, you can monitor each board’s serial output on the host to view information about data transmission and reception.
+## 2. Install Dependencies
+On Ubuntu 24.04, install the Arm GNU Toolchain and the supporting tools needed to build the firmware and access the serial ports:
+```bash
+sudo apt update
+sudo apt install git make \
+    gcc-arm-none-eabi binutils-arm-none-eabi libnewlib-arm-none-eabi \
+    python3 python3-serial python3-psutil
+```
+After installation, run
+```bash
+arm-none-eabi-gcc --version
+```
+to check that the compiler is available.
 
-## Building
+If the command prints the compiler version, the compiler is installed and available in your PATH.
+## 3. Clone RIOT and the Modules
+This module is based on RIOT OS.
+First, run
+```bash
+git clone https://github.com/RIOT-OS/RIOT.git
+```
+to clone RIOT.
 
-Place the RIOT checkout alongside this repository:
+Next, run
+```bash
+git clone https://github.com/merlins123/TimeCast-AT.git
+```
+in the same directory to clone TimeCast-AT repository.
 
+The resulting directory structure should be:
 ```text
-workspace/
+.
 ├── RIOT/
-└── modules/
+└── TimeCast-AT/
     ├── nrf_sf_radio/
     └── timecast_at/
 ```
 
-With the RIOT build dependencies and ARM toolchain installed, run the following
-from this repository's root:
+## 4. Configure the Application
+From the directory containing both repositories, enter the application directory:
 
-```sh
-make -C timecast_at BOARD=nrf52840dk -j4
+```bash
+cd TimeCast-AT/timecast_at
 ```
 
-The application Makefile locates the sibling RIOT checkout and registers
-`nrf_sf_radio` as an external module. To enable the adaptive schedule, add
-`TIMECAST_USE_PRE_P2=1` to the build command. Further application parameters
-are defined in [timecast_at/Makefile](timecast_at/Makefile).
+Connect both development boards to the host via USB and make sure they are powered on.
+## 5. Build and Flash
+Run
 
-## License
+```bash
+make UF2_SOFTDEV=DROP PORT=/dev/ttyACM0 flash term
+```
 
-The project's own source files are licensed under `LGPL-2.1-only`.
-See [LICENSE](LICENSE) for the full license text. Third-party sources retain
-their respective copyright notices and license terms.
+to build and flash the firmware for the master board, and open the terminal
+
+Open another terminal window, navigate to the same application directory, and run:
+
+```bash
+make UF2_SOFTDEV=DROP PORT=/dev/ttyACM1 LOCAL_NODE_ID=1 flash term
+```
+
+to build and flash the firmware for the follower board, and open the terminal
+
+
+## 6. Verify
+If both serial terminals display the following message such as:
+
+```text
+[tc] R=10 present=2/2
+```
+
+`R` is the local round counter. `present=2/2` means that the node has data from both nodes for that round, including its own data.
+
+If both terminals show `present=2/2` over several consecutive rounds, the two nodes are exchanging data successfully.

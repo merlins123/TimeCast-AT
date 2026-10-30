@@ -19,14 +19,12 @@
 
 #include "nrf_clock.h"
 #include "radio_driver.h"
-#include "radio_internal.h"
 #include "syscfg/syscfg.h"
 #include "controller/ble_phy.h"
 
 static void _timer2_init(void);
-static int _timer_ppi_init(void);
-static void _timer2_reset_tx(void);
-static void _timer2_reset_rx(void);
+static void _timer_ppi_init(void);
+static void _timer2_reset(void);
 static void _init_radio(void);
 
 static const uint8_t ble_hw_frequency_channels[40] = {
@@ -78,10 +76,10 @@ static void _timer2_init(void)
                        (1UL << RADIO_START_PPI_CH);
 }
 
-static int _timer_ppi_init(void)
+static void _timer_ppi_init(void)
 {
     if (_ppi_anchor_inited) {
-        return 0;
+        return;
     }
 
     NRF_TIMER3->MODE = TIMER_MODE_MODE_Timer;
@@ -111,7 +109,7 @@ static int _timer_ppi_init(void)
     _timer2_init();
     _ppi_anchor_inited = 1;
 
-    return 0;
+    return;
 }
 
 void nrf_sf_radio_wait_until(volatile uint32_t *event, uint32_t timeout_ticks)
@@ -148,11 +146,8 @@ uint32_t nrf_sf_radio_now_ticks(void)
     return NRF_TIMER3->CC[2];
 }
 
-static void _timer2_reset_tx(void)
+static void _timer2_reset(void)
 {
-    NRF_PPI->CHENSET = (1UL << TX_EN_PPI_CH);
-    NRF_PPI->CHENCLR = (1UL << RX_EN_PPI_CH);
-
     NRF_TIMER2->TASKS_SHUTDOWN = 1;
     NRF_TIMER2->EVENTS_COMPARE[0] = 0;
     NRF_TIMER2->CC[0] = NRF_SF_RADIO_RAMPUP_TIME_TICKS;
@@ -172,37 +167,19 @@ static void _timer2_reset_tx(void)
 
 void nrf_sf_radio_tx_arm(uint8_t *buf, uint32_t deadline_ticks)
 {
-    _timer2_reset_tx();
+    NRF_PPI->CHENSET = (1UL << TX_EN_PPI_CH);
+    NRF_PPI->CHENCLR = (1UL << RX_EN_PPI_CH);
+    _timer2_reset();
     NRF_TIMER3->EVENTS_COMPARE[0] = 0;
     NRF_TIMER3->CC[0] = deadline_ticks;
     NRF_RADIO->PACKETPTR = (uint32_t)buf;
 }
 
-static void _timer2_reset_rx(void)
+void nrf_sf_radio_rx_arm(uint8_t *buf, uint32_t deadline_ticks)
 {
     NRF_PPI->CHENSET = (1UL << RX_EN_PPI_CH);
     NRF_PPI->CHENCLR = (1UL << TX_EN_PPI_CH);
-
-    NRF_TIMER2->TASKS_SHUTDOWN = 1;
-    NRF_TIMER2->EVENTS_COMPARE[0] = 0;
-    NRF_TIMER2->CC[0] = NRF_SF_RADIO_RAMPUP_TIME_TICKS;
-
-    NRF_TIMER3->EVENTS_COMPARE[0] = 0;
-    NRF_RADIO->EVENTS_DISABLED = 0U;
-    NRF_RADIO->TASKS_DISABLE = 1U;
-
-    NRF_RADIO->EVENTS_END = 0U;
-    NRF_RADIO->EVENTS_ADDRESS = 0U;
-    NRF_RADIO->EVENTS_READY = 0U;
-
-    nrf_sf_radio_wait_until(&NRF_RADIO->EVENTS_DISABLED,
-                            NRF_SF_RADIO_US_TO_TIMER_TICKS(2U));
-    NRF_RADIO->EVENTS_DISABLED = 0U;
-}
-
-void nrf_sf_radio_rx_arm(uint8_t *buf, uint32_t deadline_ticks)
-{
-    _timer2_reset_rx();
+    _timer2_reset();
     NRF_TIMER3->EVENTS_COMPARE[0] = 0;
     NRF_TIMER3->CC[0] = deadline_ticks;
     NRF_RADIO->PACKETPTR = (uint32_t)buf;

@@ -84,7 +84,7 @@ bool nrf_sf_radio_tx_start(uint8_t *frame_buf, uint32_t txen_ticks,
  * @retval  2 if END event timeout
  * @retval  3 if CRC check failed
  */
-uint8_t nrf_sf_radio_rx_start(uint8_t **rx_buffer, uint32_t rxen_ticks,
+uint8_t nrf_sf_radio_rx_start(uint8_t *rx_buffer, uint32_t rxen_ticks,
                               uint32_t rx_window_end_ticks,
                               uint32_t rx_end_ticks);
 
@@ -98,7 +98,7 @@ uint8_t nrf_sf_radio_rx_start(uint8_t **rx_buffer, uint32_t rxen_ticks,
  * @return  Corrected ADDRESS timestamp in timer ticks on success
  * @retval  0 on timeout or CRC failure
  */
-uint32_t nrf_sf_radio_rx_listen_until_packet(uint8_t **rx_buffer,
+uint32_t nrf_sf_radio_rx_listen_until_packet(uint8_t *rx_buffer,
                                              uint32_t rx_end_ticks,
                                              uint32_t runtimeout_us);
 

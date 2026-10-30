@@ -19,7 +19,6 @@
 #include <stdio.h>
 #include "link_radio.h"
 #include "radio_driver.h"
-#include "radio_internal.h"
 
 #define NRF_SF_RADIO_TX_CHAIN_DELAY_TICKS (160U)
 #define NRF_SF_RADIO_ADV_ADDR_LO (0xABABABUL)
@@ -58,20 +57,26 @@ bool nrf_sf_radio_tx_start(uint8_t *frame_buf, uint32_t txen_ticks,
                                     event_end_ticks +
                                     NRF_SF_RADIO_US_TO_TIMER_TICKS(1));
         if (NRF_RADIO->EVENTS_END == 0) {
+            NRF_RADIO->EVENTS_DISABLED = 0U;
+            NRF_RADIO->TASKS_DISABLE = 1U;
+            nrf_sf_radio_wait_until(&NRF_RADIO->EVENTS_DISABLED, NRF_SF_RADIO_US_TO_TIMER_TICKS(2));
+
             return false;
         }
         return true;
     }
+    NRF_RADIO->EVENTS_DISABLED = 0U;
+    NRF_RADIO->TASKS_DISABLE = 1U;
+    nrf_sf_radio_wait_until(&NRF_RADIO->EVENTS_DISABLED, NRF_SF_RADIO_US_TO_TIMER_TICKS(2));
 
     return false;
 }
 
-uint8_t nrf_sf_radio_rx_start(uint8_t **rx_buffer, uint32_t rxen_ticks,
+uint8_t nrf_sf_radio_rx_start(uint8_t *rx_buffer, uint32_t rxen_ticks,
                               uint32_t rx_window_end_ticks,
                               uint32_t rx_end_ticks)
 {
-    uint8_t *rx_pointer = *rx_buffer;
-    nrf_sf_radio_rx_arm(rx_pointer, rxen_ticks);
+    nrf_sf_radio_rx_arm(rx_buffer, rxen_ticks);
 
     nrf_sf_radio_wait_until_abs(&NRF_RADIO->EVENTS_ADDRESS,
                                 rx_window_end_ticks);
@@ -81,10 +86,10 @@ uint8_t nrf_sf_radio_rx_start(uint8_t **rx_buffer, uint32_t rxen_ticks,
                                     rx_end_ticks +
                                         NRF_SF_RADIO_TX_CHAIN_DELAY_TICKS);
         if ((NRF_RADIO->EVENTS_END != 0) && (NRF_RADIO->CRCSTATUS != 0)) {
-            *rx_buffer = &rx_pointer[NRF_SF_RADIO_HDR_LEN + NRF_SF_RADIO_S1_LEN];
             return 0;
         }
         else if (NRF_RADIO->EVENTS_END == 0) {
+            NRF_RADIO->TASKS_DISABLE = 1U;
             return 2;
         }
         else {
@@ -97,13 +102,12 @@ uint8_t nrf_sf_radio_rx_start(uint8_t **rx_buffer, uint32_t rxen_ticks,
     }
 }
 
-uint32_t nrf_sf_radio_rx_listen_until_packet(uint8_t **rx_buffer,
+uint32_t nrf_sf_radio_rx_listen_until_packet(uint8_t *rx_buffer,
                                              uint32_t rx_end_ticks,
                                              uint32_t runtimeout_us)
 {
     uint32_t rx_ticks;
-    uint8_t *rx_pointer = *rx_buffer;
-    nrf_sf_radio_try_rx_enable(rx_pointer);
+    nrf_sf_radio_try_rx_enable(rx_buffer);
 
     nrf_sf_radio_wait_until(&NRF_RADIO->EVENTS_ADDRESS,
                             NRF_SF_RADIO_US_TO_TIMER_TICKS(runtimeout_us));
@@ -111,7 +115,6 @@ uint32_t nrf_sf_radio_rx_listen_until_packet(uint8_t **rx_buffer,
         rx_ticks = nrf_sf_radio_get_last_address_time_ticks();
         nrf_sf_radio_wait_until(&NRF_RADIO->EVENTS_END, rx_end_ticks);
         if ((NRF_RADIO->EVENTS_END != 0) && (NRF_RADIO->CRCSTATUS == 1)) {
-            *rx_buffer = &rx_pointer[NRF_SF_RADIO_HDR_LEN + NRF_SF_RADIO_S1_LEN];
             return rx_ticks -
                    NRF_SF_RADIO_TX_CHAIN_DELAY_TICKS;
         }

@@ -35,13 +35,11 @@ typedef struct {
     uint8_t local_hop;
     uint8_t schedule_ver;
     uint32_t tref_local_ticks;
-    uint32_t p2_phase_start_local_ticks;
 } timecast_protocol_p1_t;
 
 typedef struct {
     bool active;
     bool tx_slot;
-    uint8_t node_count;
     uint8_t slot_idx;
     uint8_t subslot_idx;
     uint32_t start_local_ticks;
@@ -53,7 +51,6 @@ typedef struct {
 } timecast_protocol_p2_t;
 
 typedef struct {
-    bool joined;
     bool have_schedule;
     uint32_t current_epoch;
     uint32_t rx_valid;
@@ -61,9 +58,8 @@ typedef struct {
     timecast_protocol_p2_t p2;
     uint8_t local_schedule_ver;
     uint8_t scheduled_class[TIMECAST_STORE_MAX_NODES];
-    bool round_run_pre;
-    bool master_run_pre_next_round;
-    bool master_force_initial_pre;
+    bool round_with_table;
+    bool master_with_table_next_round;
     uint32_t master_p2_incomplete_rounds;
 } timecast_protocol_state_t;
 
@@ -86,9 +82,11 @@ typedef struct {
 void protocol_init(timecast_protocol_state_t *state, bool initiator);
 void p1_start(timecast_protocol_state_t *state,
               uint32_t start_local_ticks,
-              const timecast_protocol_cfg_t *cfg,
               bool initiator,
               uint32_t epoch);
+uint32_t p1_get_slot_ticks(
+    const timecast_protocol_state_t *state,
+    const timecast_protocol_cfg_t *cfg);
 uint32_t p1_get_slot_start_local_ticks(const timecast_protocol_state_t *state,
                                        const timecast_protocol_cfg_t *cfg);
 void p1_prepare_tx(timecast_protocol_state_t *state,
@@ -104,7 +102,7 @@ void p1_finish_slot(timecast_protocol_state_t *state,
 void p2_start_original(timecast_protocol_state_t *state,
                        uint32_t start_local_ticks,
                        const timecast_protocol_cfg_t *cfg);
-void p2_start_pre_p2(timecast_protocol_state_t *state,
+void p2_start_at(timecast_protocol_state_t *state,
                      uint32_t start_local_ticks,
                      const timecast_protocol_cfg_t *cfg);
 uint32_t p2_get_subslot_start_local_ticks(const timecast_protocol_state_t *state);
@@ -117,16 +115,17 @@ bool p2_prepare_tx(const timecast_protocol_state_t *state,
 bool p2_handle_rx(timecast_protocol_state_t *state,
                   timecast_store_t *store,
                   const p2_data_frame_t *frame,
-                  const uint8_t *data);
+                  const uint8_t *data,
+                  uint8_t data_len);
 void p2_finish_subslot(timecast_protocol_state_t *state,
                        const timecast_protocol_cfg_t *cfg);
 void prepare_round(timecast_protocol_state_t *state, timecast_store_t *store,
-                   const timecast_protocol_cfg_t *cfg, bool use_pre_p2);
-uint8_t frame_len_to_class(uint8_t payload_len);
+                   const timecast_protocol_cfg_t *cfg, bool use_at);
+uint8_t frame_len_to_class(uint8_t frame_len);
 uint8_t class_to_frame_len(uint8_t class_id);
 void master_track_p2_completeness(timecast_protocol_state_t *state,
                                   const timecast_protocol_cfg_t *cfg,
-                                  uint16_t present_count, bool use_pre_p2,
+                                  uint16_t present_count, bool use_at,
                                   uint32_t incomplete_threshold);
 #ifdef __cplusplus
 }
