@@ -99,12 +99,10 @@ void p1_handle_rx(timecast_protocol_state_t *state,
 void p1_finish_slot(timecast_protocol_state_t *state,
                     const timecast_protocol_cfg_t *cfg,
                     bool did_tx);
-void p2_start_original(timecast_protocol_state_t *state,
-                       uint32_t start_local_ticks,
-                       const timecast_protocol_cfg_t *cfg);
-void p2_start_at(timecast_protocol_state_t *state,
-                     uint32_t start_local_ticks,
-                     const timecast_protocol_cfg_t *cfg);
+void p2_start(timecast_protocol_state_t *state,
+              uint32_t start_local_ticks,
+              const timecast_protocol_cfg_t *cfg,
+              bool use_at);
 uint32_t p2_get_subslot_start_local_ticks(const timecast_protocol_state_t *state);
 uint32_t p2_get_slot_ticks(const timecast_protocol_state_t *state,
                            const timecast_protocol_cfg_t *cfg);

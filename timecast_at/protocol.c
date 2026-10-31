@@ -171,39 +171,22 @@ void p1_finish_slot(timecast_protocol_state_t *state,
     }
 }
 
-static bool _p2_start_common(timecast_protocol_state_t *state,
-                             uint32_t start_local_ticks)
+void p2_start(timecast_protocol_state_t *state,
+              uint32_t start_local_ticks,
+              const timecast_protocol_cfg_t *cfg,
+              bool use_at)
 {
     memset(&state->p2, 0, sizeof(state->p2));
     state->p2.tx_slot = _tx_first(state);
     state->p2.start_local_ticks = start_local_ticks;
     state->p2.active = state->p1.has_tref;
 
-    return state->p2.active;
-}
-
-void p2_start_original(timecast_protocol_state_t *state,
-                       uint32_t start_local_ticks,
-                       const timecast_protocol_cfg_t *cfg)
-{
-    if (!_p2_start_common(state, start_local_ticks)) {
+    if (!state->p2.active) {
         return;
     }
 
-    _p2_build_schedule(state, cfg, false);
-}
-
-void p2_start_at(timecast_protocol_state_t *state,
-                     uint32_t start_local_ticks,
-                     const timecast_protocol_cfg_t *cfg)
-{
-    if (!_p2_start_common(state, start_local_ticks)) {
-        return;
-    }
-    _p2_build_schedule(state, cfg, true);
-
-    state->p2.active = state->have_schedule;
-
+    _p2_build_schedule(state, cfg, use_at);
+    state->p2.active = !use_at || state->have_schedule;
 }
 
 uint32_t p2_get_subslot_start_local_ticks(const timecast_protocol_state_t *state)

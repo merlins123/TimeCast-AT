@@ -57,8 +57,6 @@ static struct {
     uint32_t sample_rounds;
 } g_p2_success;
 
-static bool _is_master(void);
-
 static timecast_protocol_cfg_t g_proto_cfg = {
     .local_node_id = (uint8_t)LOCAL_NODE_ID,
     .ntx = NTX,
@@ -625,15 +623,16 @@ static void _run_round(uint32_t *next_master_round_start_ticks)
         _apply_round_schedule();
     }
 
-    if(USE_AT) {
+    if (USE_AT) {
         _load_local_scheduled_data_for_p2();
-        p2_start_at(&g_proto, p2_start_ticks, &g_proto_cfg);
-        if (!g_proto.p2.active) {
-            _wait_until_round_end();
-        }
-    } else {
+    }
+    else {
         _load_local_desired_data_for_p2();
-        p2_start_original(&g_proto, p2_start_ticks, &g_proto_cfg);
+    }
+
+    p2_start(&g_proto, p2_start_ticks, &g_proto_cfg, USE_AT);
+    if (USE_AT && !g_proto.p2.active) {
+        _wait_until_round_end();
     }
 
     while (g_proto.p2.active) {
