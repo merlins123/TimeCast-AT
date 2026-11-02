@@ -4,7 +4,7 @@
 This guide uses a Linux host and two nRF52-based development boards connected to the host via USB.
 After flashing the firmware, you can monitor each board’s serial output on the host to view information about data transmission and reception.
 ## 2. Install Dependencies
-On Ubuntu 24.04, install the Arm GNU Toolchain and the supporting tools needed to build the firmware and access the serial ports:
+Install the Arm GNU Toolchain and the supporting tools needed to build the firmware and access the serial ports:
 ```bash
 sudo apt update
 sudo apt install git make \
