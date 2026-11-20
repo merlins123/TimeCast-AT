@@ -95,7 +95,7 @@ bool decode_p2_data(const uint8_t *frame_buf,
     frame->source_node_id = frame_buf[1];
     frame->slot_idx = frame_buf[2];
     frame->desired_class = frame_buf[3];
-    if(frame->desired_class > 15U) {
+    if(frame->desired_class > CLASS_COUNT - 1) {
         return false;
     }
     return true;

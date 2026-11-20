@@ -10,8 +10,6 @@ The main execution flow for the TimeCast reproduction and TimeCast-AT, responsib
 Calculate the round period, including the gap between rounds, to determine the scheduled start time of the next round.
 #### `_is_master()` (`static`)
 Determine whether the node is the master based on its node ID.
-#### `_format_class_map()` (`static`)
-Convert the class IDs corresponding to each node's length into a string for log output.
 #### `_local_data_len_for_source()` (`static`)
 Get the local node's data length.
 #### `_build_local_data_with_len()` (`static`)
@@ -24,12 +22,10 @@ Initialize the scheduled class IDs of all nodes to the class ID corresponding to
 Generate data according to the local node's current desired length and write it to the P2 data store for fixed slot mode.
 #### `_load_local_scheduled_data_for_p2()` (`static`)
 Write the local node's data prepared according to the schedule to the P2 data store for AT mode.
-#### `_elapsed_since_ticks()` (`static`)
-Calculate the interval from the starting timestamp to the current timestamp for printing the elapsed P2 time.
 #### `_log_p2_success_rate()` (`static`)
-Calculate and print the node data collection ratio for the current round and the average ratio across the rounds included in the statistics. The statistics include the local node's data, and the average only includes rounds in which data from more than one node is stored.
+Calculate and print the average node data collection ratio and sample count. The statistics include the local node's data, and the average only includes rounds in which data from more than one node is stored.
 #### `_log_round_summary()` (`static`)
-A log output function for printing the required statistics.
+Print the average round duration, average radio enabled time, and average node data collection ratio.
 #### `_handle_p1_rx()` (`static`)
 Handle packets received during the P1 phase.
 #### `_handle_p2_rx()` (`static`)

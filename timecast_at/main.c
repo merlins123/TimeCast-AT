@@ -14,12 +14,12 @@
 #include "protocol.h"
 #include "store.h"
 
-#if (APP_DATA_LEN > (TIMECAST_STORE_MAX_DATA_LEN))
+#if (APP_DATA_LEN > (MAX_DATA_LEN))
 #  error "APP_DATA_LEN exceeds TIMECAST_STORE_MAX_DATA_LEN budget"
 #endif
 #define LOCAL_DATA_LEN ((uint8_t)(APP_DATA_LEN))
 #define LOCAL_P2_PAYLOAD_LEN \
-        ((uint8_t)(NRF_SF_RADIO_HDR_LEN + PACKET_P2_DATA_FRAME_HDR_LEN + LOCAL_DATA_LEN))
+        ((NRF_SF_RADIO_HDR_LEN + PACKET_P2_DATA_FRAME_HDR_LEN + LOCAL_DATA_LEN))
 #define PACKET_AIR_TIME_US(payload_len) \
         (8U * ((uint32_t)(payload_len) + SLOT_PHY_OVERHEAD_BYTES))
 #define P2_PAYLOAD_TO_SUBSLOT_US(payload_len) \
@@ -38,24 +38,32 @@ static uint8_t rx_buffer[258] = { 0 };
 static timecast_store_t g_store;
 static timecast_protocol_state_t g_proto;
 static uint32_t g_round_count;
+/* Per-round RX/TX enabled time estimate, in microseconds. */
+static uint32_t g_round_radio_on_us;
+static uint64_t g_total_radio_on_us;
+static uint32_t g_round_duration_us;
+static uint64_t g_total_round_duration_us;
 static uint8_t g_local_desired_class;
 static uint8_t g_local_scheduled_data_len;
-static uint8_t g_local_scheduled_data[TIMECAST_STORE_MAX_DATA_LEN];
+static uint8_t g_local_scheduled_data[MAX_DATA_LEN];
 static struct {
     uint32_t subslot_miss;
     uint32_t rx_attempts;
-    uint32_t rx_arm_late;
     uint32_t no_address;
     uint32_t end_timeout;
     uint32_t crc_error;
     uint32_t reject;
-    int32_t min_arm_slack_ticks;
     uint32_t max_address_offset_ticks;
 } g_p2_diag;
 static struct {
     uint64_t total_present;
     uint32_t sample_rounds;
 } g_p2_success;
+static struct {
+    bool enabled;
+    /* Relative to tref: self is 0, missing sources stay UINT32_MAX. */
+    uint32_t first_rx_us[TIMECAST_STORE_MAX_NODES];
+} g_prr_trace;
 
 static timecast_protocol_cfg_t g_proto_cfg = {
     .local_node_id = (uint8_t)LOCAL_NODE_ID,
@@ -88,50 +96,14 @@ static bool _is_master(void)
     return (LOCAL_NODE_ID == 0U);
 }
 
-static void _format_class_map(char *dst, size_t dst_len,
-                              const uint8_t *classes, bool desired_local_map)
-{
-    static const char hex_digits[] = "0123456789ABCDEF";
-    uint8_t source_id;
-
-    if (!dst || (dst_len == 0U)) {
-        return;
-    }
-
-    if ((dst_len <= (size_t)g_proto_cfg.p2_node_count) ||
-        (!desired_local_map && !classes)) {
-        dst[0] = '\0';
-        return;
-    }
-
-    for (source_id = 0U; source_id < g_proto_cfg.p2_node_count; source_id++) {
-        uint8_t class_id;
-
-        if (desired_local_map) {
-            if (source_id != (uint8_t)LOCAL_NODE_ID) {
-                dst[source_id] = '.';
-                continue;
-            }
-            class_id = g_local_desired_class;
-        }
-        else {
-            class_id = classes[source_id];
-        }
-        dst[source_id] = (class_id <= CLASS_MAX_ID) ? hex_digits[class_id] : '?';
-    }
-    dst[g_proto_cfg.p2_node_count] = '\0';
-}
-
 static uint8_t _local_data_len_for_source(void)
 {
 #if (TEST_NODE2_CLASS_PERIOD > 0U)
     if (LOCAL_NODE_ID == 2U) {
         uint32_t round_idx = g_round_count;
-        uint32_t class_span = (uint32_t)TEST_NODE2_CLASS_MAX -
-                              (uint32_t)TEST_NODE2_CLASS_MIN + 1U;
-        uint8_t class_id = (uint8_t)((uint32_t)TEST_NODE2_CLASS_MIN +
-                                     ((round_idx / (uint32_t)TEST_NODE2_CLASS_PERIOD) %
-                                      class_span));
+        uint8_t class_id = (uint8_t)(
+            (round_idx / (uint32_t)TEST_NODE2_CLASS_PERIOD) %
+            (uint32_t)CLASS_COUNT);
         uint8_t p2_frame_len = class_to_frame_len(class_id);
 
         return (uint8_t)(p2_frame_len - PACKET_P2_DATA_FRAME_HDR_LEN);
@@ -196,7 +168,7 @@ static void _local_data_init(void)
 static void _load_local_desired_data_for_p2(void)
 {
     uint8_t source_id = (uint8_t)LOCAL_NODE_ID;
-    uint8_t data[TIMECAST_STORE_MAX_DATA_LEN];
+    uint8_t data[MAX_DATA_LEN];
     uint8_t data_len;
 
     data_len = _local_data_len_for_source();
@@ -214,19 +186,8 @@ static void _load_local_scheduled_data_for_p2(void)
     }
 }
 
-static uint32_t _elapsed_since_ticks(uint32_t start_ticks, uint32_t now_tick)
+static void _log_p2_success_rate(void)
 {
-    if (start_ticks == 0U) {
-        return 0U;
-    }
-
-    return now_tick - start_ticks;
-}
-
-static void _log_p2_success_rate(uint16_t present_count)
-{
-    uint32_t current_rate_x100 =
-        ((uint32_t)present_count * 10000U) / g_proto_cfg.p2_node_count;
     uint32_t average_rate_x100 = 0U;
 
     if (g_p2_success.sample_rounds > 0U) {
@@ -236,10 +197,6 @@ static void _log_p2_success_rate(uint16_t present_count)
              g_proto_cfg.p2_node_count));
     }
 
-    printf("[tc:rate] R=%" PRIu32 " cur=%" PRIu32 ".%02" PRIu32 "\n",
-           g_round_count,
-           current_rate_x100 / 100U,
-           current_rate_x100 % 100U);
     printf("[tc:rate] R=%" PRIu32 " avg=%" PRIu32 ".%02" PRIu32
            " n=%" PRIu32 "\n",
            g_round_count,
@@ -250,147 +207,27 @@ static void _log_p2_success_rate(uint16_t present_count)
 
 static void _log_round_summary(void)
 {
-    uint8_t local_pending_updates = (USE_AT &&
-                                    (g_local_desired_class !=
-                                     g_proto.scheduled_class[LOCAL_NODE_ID])) ? 1U : 0U;
-    uint32_t now_tick = nrf_sf_radio_now_ticks();
-    uint32_t p2_duration_ticks = _elapsed_since_ticks(g_proto.p2.start_local_ticks, now_tick);
-    uint16_t present_count = store_present_count(&g_store);
-    uint32_t p2_slot_ticks = p2_get_slot_ticks(&g_proto, &g_proto_cfg);
-    bool log_update_state = USE_AT &&
-                            (g_proto.round_with_table ||
-                             (local_pending_updates > 0U) ||
-                             g_proto.master_with_table_next_round ||
-                             (g_proto.master_p2_incomplete_rounds > 0U));
-    char missing_map[TIMECAST_STORE_MAX_NODES + 1U];
+    uint32_t radio_on_avg_us = g_round_count ?
+        (uint32_t)(g_total_radio_on_us / g_round_count) : 0U;
+    uint32_t round_avg_us = g_round_count ?
+        (uint32_t)(g_total_round_duration_us / g_round_count) : 0U;
 
-    printf("[tc] R=%" PRIu32 " id=%u role=%s\n",
-           g_round_count,
-           (unsigned)LOCAL_NODE_ID,
-           _is_master() ? "master" : "follower");
-    printf("[tc] R=%" PRIu32 " e=%" PRIu32 "\n",
-           g_round_count,
-           g_proto.current_epoch);
-    printf("[tc] R=%" PRIu32 " j=%u h=%u\n",
-           g_round_count,
-           (unsigned)g_proto.p1.has_tref,
-           (unsigned)g_proto.p1.local_hop);
-    printf("[tc] R=%" PRIu32 " ss=%u %s=%" PRIu32 "\n",
-           g_round_count,
-           (unsigned)g_proto.p1.slot_idx,
-           USE_AT ? "p1rx" : "rx",
-           g_proto.rx_valid);
-    if (USE_AT) {
-        printf("[tc] R=%" PRIu32 " with_table=%u \n",
-               g_round_count,
-               (unsigned)g_proto.round_with_table);
+    printf("[tc] R=%" PRIu32 " round_avg_us=%" PRIu32 "\n",
+           g_round_count, round_avg_us);
+    printf("[tc] R=%" PRIu32 " radio_on_avg_us=%" PRIu32 "\n",
+           g_round_count, radio_on_avg_us);
+    _log_p2_success_rate();
+}
+
+static void _log_prr_trace(void)
+{
+    printf("[tc:prr_time] E=%" PRIu32 " id=%u rx_us=",
+           g_proto.current_epoch, (unsigned)g_proto_cfg.local_node_id);
+    for (uint8_t source_id = 0U; source_id < g_proto_cfg.p2_node_count; source_id++) {
+        printf("%s%" PRIu32, source_id ? "," : "",
+               g_prr_trace.first_rx_us[source_id]);
     }
-    printf("[tc] R=%" PRIu32 " p2rx=%" PRIu32 "\n",
-           g_round_count,
-           g_proto.p2.rx_valid);
-    printf("[tc] R=%" PRIu32 " p2store=%" PRIu32 "\n",
-           g_round_count,
-           g_proto.p2.store_updates);
-    _log_p2_success_rate(present_count);
-    printf("[tc] R=%" PRIu32 " present=%u/%u\n",
-           g_round_count,
-           (unsigned)present_count,
-           (unsigned)P2_NODE_COUNT);
-    printf("[tc] R=%" PRIu32 " p1slot=%u\n",
-           g_round_count,
-           (unsigned)NRF_SF_RADIO_TIMER_TICKS_TO_US(
-               p1_get_slot_ticks(&g_proto, &g_proto_cfg)));
-    if (present_count < g_proto_cfg.p2_node_count) {
-        for (uint8_t id = 0U; id < g_proto_cfg.p2_node_count; id++) {
-            missing_map[id] = g_store.entries[id].present ? '.' : 'X';
-        }
-        missing_map[g_proto_cfg.p2_node_count] = '\0';
-        for (uint8_t offset = 0U; offset < g_proto_cfg.p2_node_count;
-             offset = (uint8_t)(offset + 16U)) {
-            uint8_t map_len =
-                (uint8_t)(g_proto_cfg.p2_node_count - offset);
-
-            if (map_len > 16U) {
-                map_len = 16U;
-            }
-            printf("[tc:miss] R=%" PRIu32 " o=%u %.*s\n",
-                   g_round_count,
-                   (unsigned)offset,
-                   (int)map_len,
-                   &missing_map[offset]);
-        }
-    }
-    printf("[tc] R=%" PRIu32 " p2slot=%" PRIu32 "\n",
-           g_round_count,
-           NRF_SF_RADIO_TIMER_TICKS_TO_US(p2_slot_ticks));
-    printf("[tc] R=%" PRIu32 " p2rdu=%" PRIu32 "\n",
-           g_round_count,
-           NRF_SF_RADIO_TIMER_TICKS_TO_US(p2_duration_ticks));
-    printf("[tc] R=%" PRIu32 " p2start=%" PRIu32 "\n",
-           g_round_count,
-           NRF_SF_RADIO_TIMER_TICKS_TO_US(g_proto.p2.start_local_ticks));
-    printf("[tc:d1] R=%" PRIu32 " m=%" PRIu32 "\n",
-           g_round_count,
-           g_p2_diag.subslot_miss);
-    printf("[tc:d1] R=%" PRIu32 " a=%" PRIu32 " l=%" PRIu32 "\n",
-           g_round_count,
-           g_p2_diag.rx_attempts,
-           g_p2_diag.rx_arm_late);
-    printf("[tc:d2] R=%" PRIu32 " n=%" PRIu32 "\n",
-           g_round_count,
-           g_p2_diag.no_address);
-    printf("[tc:d2] R=%" PRIu32 " e=%" PRIu32 " c=%" PRIu32 "\n",
-           g_round_count,
-           g_p2_diag.end_timeout,
-           g_p2_diag.crc_error);
-
-    printf("[tc:d3] R=%" PRIu32 " r=%" PRIu32 "\n",
-           g_round_count,
-           g_p2_diag.reject);
-    printf("[tc:d3] R=%" PRIu32 " s=%" PRId32 " o=%" PRIu32 "\n",
-           g_round_count,
-           g_p2_diag.min_arm_slack_ticks,
-           g_p2_diag.max_address_offset_ticks);
-    if (log_update_state) {
-        uint8_t map_offset;
-        char scheduled_class_map[TIMECAST_STORE_MAX_NODES + 1U];
-        char desired_class_map[TIMECAST_STORE_MAX_NODES + 1U];
-
-        _format_class_map(scheduled_class_map, sizeof(scheduled_class_map),
-                          g_proto.scheduled_class, false);
-        _format_class_map(desired_class_map, sizeof(desired_class_map),
-                          NULL, true);
-        printf("[tc:u1] R=%" PRIu32 " loc=%u next=%u\n",
-               g_round_count,
-               (unsigned)local_pending_updates,
-               (unsigned)g_proto.master_with_table_next_round);
-        printf("[tc:u1] R=%" PRIu32 " inc=%" PRIu32 "\n",
-               g_round_count,
-               g_proto.master_p2_incomplete_rounds);
-        printf("[tc:u2] R=%" PRIu32 " have=%u\n",
-               g_round_count,
-               (unsigned)g_proto.have_schedule);
-        for (map_offset = 0U;
-             map_offset < g_proto_cfg.p2_node_count;
-             map_offset = (uint8_t)(map_offset + 16U)) {
-            uint8_t map_len =
-                (uint8_t)(g_proto_cfg.p2_node_count - map_offset);
-
-            if (map_len > 16U) {
-                map_len = 16U;
-            }
-            printf("[tc:cc] R=%" PRIu32 " o=%u %.*s\n",
-                   g_round_count,
-                   (unsigned)map_offset,
-                   (int)map_len,
-                   &scheduled_class_map[map_offset]);
-            printf("[tc:dc] R=%" PRIu32 " o=%u %.*s\n",
-                   g_round_count,
-                   (unsigned)map_offset,
-                   (int)map_len,
-                   &desired_class_map[map_offset]);
-        }
-    }
+    putchar('\n');
 }
 
 static void _handle_p1_rx(const uint8_t *frame_buf, uint32_t rx_time)
@@ -410,32 +247,44 @@ static void _handle_p2_rx(const uint8_t *frame_buf)
     uint8_t data_len;
     const uint8_t *buf = &frame_buf[NRF_SF_RADIO_HDR_LEN + NRF_SF_RADIO_S1_LEN];
 
-    if ((frame_buf[1] < NRF_SF_RADIO_ADV_ADDR_LEN + PACKET_P2_DATA_FRAME_HDR_LEN) ||
-        (frame_buf[1] > NRF_SF_RADIO_ADV_ADDR_LEN + PACKET_P2_DATA_MAX_FRAME_LEN)) {
+    if (frame_buf[1] < NRF_SF_RADIO_ADV_ADDR_LEN + PACKET_P2_DATA_FRAME_HDR_LEN) {
         g_p2_diag.reject++;
         return;
     }
     data_len = frame_buf[1] - NRF_SF_RADIO_ADV_ADDR_LEN - PACKET_P2_DATA_FRAME_HDR_LEN;
+    if (data_len > PACKET_P2_DATA_MAX_DATA_LEN) {
+        g_p2_diag.reject++;
+        return;
+    }
 
     if (!decode_p2_data(buf, &frame)) {
         g_p2_diag.reject++;
         return;
     }
     
+    uint16_t present_count = g_store.present_count;
     if (!p2_handle_rx(&g_proto, &g_store, &frame, &buf[PACKET_P2_DATA_FRAME_HDR_LEN], data_len)) {
         g_p2_diag.reject++;
         return;
     }
 
+    if (g_prr_trace.enabled && (g_store.present_count > present_count)) {
+        g_prr_trace.first_rx_us[frame.source_node_id] =
+            NRF_SF_RADIO_TIMER_TICKS_TO_US(nrf_sf_radio_get_last_end_time_ticks() -
+                                          g_proto.p1.tref_local_ticks);
+    }
 }
 
 static void _scan_until_reference(void)
 {
     while (g_proto.p1.active &&
            !g_proto.p1.has_tref) {
-        
+        uint32_t rx_start_ticks = nrf_sf_radio_now_ticks();
         uint32_t rx_ticks = nrf_sf_radio_rx_listen_until_packet(
             rx_buffer, P1_SLOT_TICKS + g_proto_cfg.packed_schedule_ticks, P1_SCAN_LOG_INTERVAL_US);
+        g_round_radio_on_us += NRF_SF_RADIO_TIMER_TICKS_TO_US(
+            (NRF_RADIO->EVENTS_END ? nrf_sf_radio_get_last_end_time_ticks() :
+                                   nrf_sf_radio_now_ticks()) - rx_start_ticks);
 
         if (rx_ticks > 2U) {
             _handle_p1_rx(rx_buffer, rx_ticks);
@@ -470,6 +319,11 @@ static void _run_p1_slot(void)
                                   slot_start_ticks,
                                   slot_active_end_ticks,
                                   frame_len);
+        if (NRF_TIMER3->EVENTS_COMPARE[0] != 0U) {
+            g_round_radio_on_us += NRF_SF_RADIO_TIMER_TICKS_TO_US(
+                (NRF_RADIO->EVENTS_END ? nrf_sf_radio_get_last_end_time_ticks() :
+                                       nrf_sf_radio_now_ticks()) - slot_start_ticks);
+        }
         p1_finish_slot(&g_proto, &g_proto_cfg, do_tx);
         
 
@@ -508,9 +362,14 @@ static void _run_p2_subslot(void)
         }
         encode_p2_data(frame_buf, &frame, data_ptr, g_store.entries[owner_id].len);
         nrf_sf_radio_tx_start(frame_buf, subslot_start_ticks,
-                                   subslot_active_end_ticks,
-                                   PACKET_P2_DATA_FRAME_HDR_LEN +
-                                   g_store.entries[owner_id].len);
+                             subslot_active_end_ticks,
+                             PACKET_P2_DATA_FRAME_HDR_LEN +
+                             g_store.entries[owner_id].len);
+        if (NRF_TIMER3->EVENTS_COMPARE[0] != 0U) {
+            g_round_radio_on_us += NRF_SF_RADIO_TIMER_TICKS_TO_US(
+                (NRF_RADIO->EVENTS_END ? nrf_sf_radio_get_last_end_time_ticks() :
+                                       nrf_sf_radio_now_ticks()) - subslot_start_ticks);
+        }
 
         p2_finish_subslot(&g_proto, &g_proto_cfg);
         return;
@@ -521,7 +380,6 @@ static void _run_p2_subslot(void)
 
     if ((int32_t)(now_tick - rxen_ticks) >= 0) {
         g_p2_diag.subslot_miss++;
-        g_p2_diag.rx_arm_late++;
         (void)p2_finish_subslot(&g_proto, &g_proto_cfg);
         return;
     }
@@ -532,20 +390,16 @@ static void _run_p2_subslot(void)
     }
 
     uint8_t rx_status;
-    int32_t arm_slack_ticks =
-        (int32_t)(rxen_ticks - nrf_sf_radio_now_ticks());
 
     g_p2_diag.rx_attempts++;
-    if ((g_p2_diag.rx_attempts == 1U) ||
-        (arm_slack_ticks < g_p2_diag.min_arm_slack_ticks)) {
-        g_p2_diag.min_arm_slack_ticks = arm_slack_ticks;
-    }
-    if (arm_slack_ticks <= 0) {
-        g_p2_diag.rx_arm_late++;
-    }
     rx_status = nrf_sf_radio_rx_start(
         rx_buffer, rxen_ticks,
         rx_window_end_ticks + 10, subslot_active_end_ticks);
+    if (NRF_TIMER3->EVENTS_COMPARE[0] != 0U) {
+        g_round_radio_on_us += NRF_SF_RADIO_TIMER_TICKS_TO_US(
+            (NRF_RADIO->EVENTS_END ? nrf_sf_radio_get_last_end_time_ticks() :
+                                   nrf_sf_radio_now_ticks()) - rxen_ticks);
+    }
     if (rx_status == 0U) {
         uint32_t address_offset_ticks =
             nrf_sf_radio_get_last_address_time_ticks() - subslot_start_ticks;
@@ -609,10 +463,22 @@ static void _run_round(uint32_t *next_master_round_start_ticks)
     uint32_t p1_slot_ticks;
     uint32_t p2_start_ticks;
 
+    g_round_radio_on_us = 0U;
     _prepare_local_data();
     prepare_round(&g_proto, &g_store, &g_proto_cfg, USE_AT);
 
     _run_p1_phase(*next_master_round_start_ticks);
+
+    g_prr_trace.enabled = false;
+#if (PRR_TRACE_ROUNDS > 0)
+    const uint32_t trace_start_epoch = PRR_TRACE_START_EPOCH;
+    g_prr_trace.enabled =
+        (g_proto.current_epoch >= trace_start_epoch) &&
+        ((g_proto.current_epoch - trace_start_epoch) < PRR_TRACE_ROUNDS);
+#endif
+    if (g_prr_trace.enabled) {
+        memset(g_prr_trace.first_rx_us, 0xff, sizeof(g_prr_trace.first_rx_us));
+    }
 
     p1_slot_ticks = p1_get_slot_ticks(&g_proto, &g_proto_cfg);
     p2_start_ticks = g_proto.p1.tref_local_ticks +
@@ -631,6 +497,11 @@ static void _run_round(uint32_t *next_master_round_start_ticks)
     }
 
     p2_start(&g_proto, p2_start_ticks, &g_proto_cfg, USE_AT);
+    if (g_prr_trace.enabled) {
+        if (store_has_data(&g_store, g_proto_cfg.local_node_id)) {
+            g_prr_trace.first_rx_us[g_proto_cfg.local_node_id] = 0U;
+        }
+    }
     if (USE_AT && !g_proto.p2.active) {
         _wait_until_round_end();
     }
@@ -639,12 +510,18 @@ static void _run_round(uint32_t *next_master_round_start_ticks)
         _run_p2_subslot();
     }
 
+    /* Full P2 schedule end relative to tref, excluding the inter-round gap. */
+    g_round_duration_us = NRF_SF_RADIO_TIMER_TICKS_TO_US(
+        _round_period_ticks() - NRF_SF_RADIO_US_TO_TIMER_TICKS(ROUND_GAP_US));
+    g_total_round_duration_us += g_round_duration_us;
+
     master_track_p2_completeness(&g_proto, &g_proto_cfg,
                                  g_store.present_count, USE_AT,
                                  MASTER_P2_INCOMPLETE_THRESHOLD);
     if (_is_master()) {
         *next_master_round_start_ticks += _round_period_ticks();
     }
+    g_total_radio_on_us += g_round_radio_on_us;
     g_round_count++;
 }
 
@@ -652,14 +529,6 @@ int main(void)
 {
     uint32_t next_master_round_start_ticks;
 
-    printf("TimeCast start. node_id=%u hop=p1 role=%s ntx=%u"
-           " at=%u app_data=%u payload=%u\n",
-           (unsigned)LOCAL_NODE_ID,
-           _is_master() ? "master" : "follower",
-           (unsigned)P2_NTX,
-           (unsigned)USE_AT,
-           (unsigned)APP_DATA_LEN,
-           (unsigned)LOCAL_P2_PAYLOAD_LEN);
     nrf_sf_radio_start();
 
     protocol_init(&g_proto, _is_master());
@@ -672,13 +541,15 @@ int main(void)
                                     NRF_SF_RADIO_US_TO_TIMER_TICKS(MASTER_START_DELAY_US);
 
     while (g_round_count < ROUND_TIME) {
-            _run_round(&next_master_round_start_ticks);
+        _run_round(&next_master_round_start_ticks);
+        g_p2_success.total_present += g_store.present_count;
+        g_p2_success.sample_rounds++;
 
-        if (g_store.present_count > 1U) {
-            g_p2_success.total_present += g_store.present_count;
-            g_p2_success.sample_rounds++;
-        }
+        if(g_round_count%100 == 0)
         _log_round_summary();
+        if (g_prr_trace.enabled) {
+            _log_prr_trace();
+        }
     }
 
     return 0;

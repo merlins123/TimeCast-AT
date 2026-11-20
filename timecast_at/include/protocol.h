@@ -16,15 +16,8 @@
 extern "C" {
 #endif
 
-#define CLASS_COUNT      (16U)
 #define CLASS_MAX_ID     (CLASS_COUNT - 1U)
 #define CLASS_INVALID_ID (CLASS_COUNT)
-#if (TEST_NODE2_CLASS_MAX > CLASS_MAX_ID)
-#  error "TEST_NODE2_CLASS_MAX exceeds class range"
-#endif
-#if (TEST_NODE2_CLASS_MIN > TEST_NODE2_CLASS_MAX)
-#  error "TEST_NODE2_CLASS_MIN exceeds TEST_NODE2_CLASS_MAX"
-#endif
 
 typedef struct {
     bool active;

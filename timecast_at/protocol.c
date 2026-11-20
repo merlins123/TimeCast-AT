@@ -34,13 +34,6 @@ static void _p2_build_schedule(timecast_protocol_state_t *state,
     state->p2.slot_ticks = slot_ticks;
 }
 
-
-static uint8_t _class_span_bytes(void)
-{
-    return (uint8_t)(((PACKET_P2_DATA_MAX_DATA_LEN + 1U) +
-                      CLASS_COUNT - 1U) / CLASS_COUNT);
-}
-
 void protocol_init(timecast_protocol_state_t *state, bool initiator)
 {
     if (!state) {
@@ -297,43 +290,41 @@ void prepare_round(timecast_protocol_state_t *state, timecast_store_t *store,
 
 uint8_t frame_len_to_class(uint8_t frame_len)
 {
-    uint32_t offset;
+    uint32_t data_len;
     uint32_t class_id;
 
-    if (frame_len <= PACKET_P2_DATA_FRAME_HDR_LEN) {
-        return 0U;
-    }
-    if (frame_len == PACKET_P2_DATA_MAX_FRAME_LEN) {
-        return CLASS_MAX_ID;
-    }
-    if (frame_len > PACKET_P2_DATA_MAX_FRAME_LEN) {
+    if (frame_len < PACKET_P2_DATA_FRAME_HDR_LEN) {
         return CLASS_INVALID_ID;
     }
 
-    offset = (uint32_t)frame_len - (uint32_t)PACKET_P2_DATA_FRAME_HDR_LEN;
-    class_id = offset / (uint32_t)_class_span_bytes();
-    if (class_id > CLASS_MAX_ID) {
+    data_len = (uint32_t)frame_len - PACKET_P2_DATA_FRAME_HDR_LEN;
+
+    if (data_len > MAX_DATA_LEN) {
         return CLASS_INVALID_ID;
     }
+    if (data_len == 0U) {
+        return 0U;
+    }
+
+    class_id = (data_len * CLASS_COUNT + MAX_DATA_LEN - 1U) /
+               MAX_DATA_LEN - 1U;
 
     return (uint8_t)class_id;
 }
 
 uint8_t class_to_frame_len(uint8_t class_id)
 {
-    uint32_t frame_len;
+   uint32_t data_len;
 
-    if (class_id > CLASS_MAX_ID) {
+    if (class_id >= CLASS_COUNT) {
         return 0U;
     }
-    if (class_id == CLASS_MAX_ID) {
-        return PACKET_P2_DATA_MAX_FRAME_LEN;
-    }
 
-    frame_len = (uint32_t)PACKET_P2_DATA_FRAME_HDR_LEN +
-                  ((uint32_t)(class_id + 1U) * (uint32_t)_class_span_bytes()) - 1U;
+    data_len = ((uint32_t)class_id + 1U) * MAX_DATA_LEN /
+                    CLASS_COUNT;
 
-    return (uint8_t)frame_len;
+    return (uint8_t)(PACKET_P2_DATA_FRAME_HDR_LEN + data_len);
+
 }
 
 void master_track_p2_completeness(timecast_protocol_state_t *state,

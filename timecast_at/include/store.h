@@ -17,15 +17,12 @@ extern "C" {
 #  define TIMECAST_STORE_MAX_NODES (64U)
 #endif
 
-#ifndef TIMECAST_STORE_MAX_DATA_LEN
-#  define TIMECAST_STORE_MAX_DATA_LEN (110U)
-#endif
 
 typedef struct {
     bool present;
     uint8_t len;
     uint8_t desired_class;
-    uint8_t data[TIMECAST_STORE_MAX_DATA_LEN];
+    uint8_t data[MAX_DATA_LEN];
 } timecast_store_entry_t;
 
 typedef struct {
